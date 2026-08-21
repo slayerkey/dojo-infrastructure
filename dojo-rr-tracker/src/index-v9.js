@@ -37,20 +37,21 @@ export default class RRTrackerV9 extends RRTrackerV8 {
 
         entries.push({
           ...entry,
-          // The leaderboard is a monthly competition, so its transformation line
-          // resets automatically each month. Personal /rr keeps the all-time
+          // The leaderboard is a monthly competition. Its transformation line
+          // resets each UTC month and starts from the first rank/RR actually
+          // observed inside that month. Personal /rr keeps the all-time
           // lowest tracked -> all-time peak view from V8/V7.
-          start_rank: progression.start?.rank_name || entry.current_rank || null,
+          start_rank: progression.start?.rank_name || null,
           start_rr:
             progression.start?.rr_after == null
-              ? (entry.current_rr == null ? null : Number(entry.current_rr))
+              ? null
               : Number(progression.start.rr_after),
           start_rank_at: progression.start?.game_timestamp || null,
-          start_rank_source: progression.start?.source || "monthly_start",
-          peak_rank: progression.peak?.rank_name || entry.current_rank || null,
+          start_rank_source: progression.start ? "first_month_match" : null,
+          peak_rank: progression.peak?.rank_name || null,
           peak_rr:
             progression.peak?.rr_after == null
-              ? (entry.current_rr == null ? null : Number(entry.current_rr))
+              ? null
               : Number(progression.peak.rr_after),
           peak_rank_at: progression.peak?.game_timestamp || null,
         });
@@ -73,43 +74,25 @@ async function getPlayerLink(db, discordUserId) {
 }
 
 async function getMonthlyProgression(db, playerId, monthStart, monthEnd) {
-  const [beforeMonth, monthRowsResult] = await Promise.all([
-    db.prepare(
-      `SELECT rank_name, rr_after, game_timestamp
-       FROM rr_matches
-       WHERE player_id = ?
-         AND rank_name IS NOT NULL
-         AND game_timestamp < ?
-       ORDER BY game_timestamp DESC
-       LIMIT 1`,
-    )
-      .bind(playerId, monthStart)
-      .first(),
-    db.prepare(
-      `SELECT rank_name, rr_after, game_timestamp
-       FROM rr_matches
-       WHERE player_id = ?
-         AND rank_name IS NOT NULL
-         AND game_timestamp >= ?
-         AND game_timestamp < ?
-       ORDER BY game_timestamp ASC`,
-    )
-      .bind(playerId, monthStart, monthEnd)
-      .all(),
-  ]);
+  const monthRowsResult = await db.prepare(
+    `SELECT rank_name, rr_after, game_timestamp
+     FROM rr_matches
+     WHERE player_id = ?
+       AND rank_name IS NOT NULL
+       AND game_timestamp >= ?
+       AND game_timestamp < ?
+     ORDER BY game_timestamp ASC`,
+  )
+    .bind(playerId, monthStart, monthEnd)
+    .all();
 
   const monthRows = monthRowsResult?.results || [];
 
-  // Best possible month baseline:
-  // 1) their last recorded rank before the month began, if we have it;
-  // 2) otherwise their first recorded rank inside the month.
-  const start = beforeMonth?.rank_name
-    ? { ...beforeMonth, source: "pre_month_snapshot" }
-    : monthRows[0]?.rank_name
-      ? { ...monthRows[0], source: "first_month_match" }
-      : null;
+  // Monthly Start Rank is intentionally the first rank/RR observed inside
+  // the month. Do not substitute the last snapshot from the previous month.
+  const start = monthRows[0]?.rank_name ? { ...monthRows[0] } : null;
 
-  let peak = start ? { ...start, score: rankScore(start.rank_name) } : null;
+  let peak = null;
   for (const row of monthRows) {
     const score = rankScore(row.rank_name);
     if (!score) continue;

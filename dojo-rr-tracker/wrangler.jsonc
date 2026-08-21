@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "dojo-rr-tracker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-21",
+  "workers_dev": true,
+  "keep_vars": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dojo-rr-tracker-db",
+      "database_id": "d82a0fad-54ce-4a05-b107-9f326d15dc0a"
+    }
+  ]
+}

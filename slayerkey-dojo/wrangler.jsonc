@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "slayerkey-dojo",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-21",
+  "workers_dev": true,
+  "keep_vars": true,
+  "kv_namespaces": [
+    {
+      "binding": "MEMBER_LINKS",
+      "id": "4b18ee7892da4113b538e95caa883673"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "secrets": {
+    "required": [
+      "DISCORD_BOT_TOKEN",
+      "WHOP_API_KEY",
+      "WHOP_WEBHOOK_SECRET"
+    ]
+  }
+}

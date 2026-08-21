@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "slayerkey-dojo",
-  "main": "src/index-v3.js",
+  "main": "src/index-v4.js",
   "compatibility_date": "2026-08-21",
   "workers_dev": true,
   "keep_vars": true,
@@ -23,7 +23,21 @@
       "service": "dojo-rr-tracker"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DISCORD_GATEWAY",
+        "class_name": "DiscordGateway"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-discord-gateway",
+      "new_sqlite_classes": ["DiscordGateway"]
+    }
+  ],
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": ["* * * * *"]
   }
 }

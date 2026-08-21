@@ -20,6 +20,7 @@ export default {
         const body = await response.json();
         body.discord = body.discord || {};
         body.discord.command_state_mode = "memory-cooldowns-kv-write-fail-open-v16";
+        body.discord.member_link_cache_mode = "skip-unchanged-command-writes";
         return Response.json(body, { status: response.status });
       } catch {
         return response;
@@ -72,6 +73,18 @@ function commandSafeEnv(env) {
             return;
           }
 
+          // Repeated /verify and related command flows often try to cache the same
+          // Whop <-> Discord relationship again. Reads are cheap relative to writes,
+          // so skip the write entirely when the mapping has not changed.
+          if (textKey.startsWith("whop:") || textKey.startsWith("discord:")) {
+            try {
+              const existing = await target.get(textKey, "json");
+              if (sameMemberLink(textKey, existing, value)) return;
+            } catch {
+              // Cache comparison is optional. Fall through to the normal write.
+            }
+          }
+
           try {
             return await target.put(key, value, options);
           } catch (error) {
@@ -92,4 +105,27 @@ function commandSafeEnv(env) {
       return Reflect.get(target, property, target);
     },
   });
+}
+
+function sameMemberLink(key, existing, nextValue) {
+  if (!existing) return false;
+
+  let next;
+  try {
+    next = typeof nextValue === "string" ? JSON.parse(nextValue) : nextValue;
+  } catch {
+    return false;
+  }
+
+  if (!next || typeof next !== "object") return false;
+
+  if (key.startsWith("whop:")) {
+    return String(existing.discord_user_id || "") === String(next.discord_user_id || "");
+  }
+
+  if (key.startsWith("discord:")) {
+    return String(existing.whop_user_id || "") === String(next.whop_user_id || "");
+  }
+
+  return false;
 }

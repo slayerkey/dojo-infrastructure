@@ -59,7 +59,7 @@ export default class RRTrackerV2 extends BaseRRTracker {
     const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
     const recentStart = new Date(now.getTime() - 12 * HOUR_MS);
 
-    const [recent, dailyResult, firstTracked, lastSync] = await Promise.all([
+    const [recent, dailyResult, firstTracked, lastSync, leaderboardPlace] = await Promise.all([
       env.DB.prepare(
         "SELECT COALESCE(SUM(rr_change), 0) AS rr, COUNT(*) AS games FROM rr_matches WHERE player_id = ? AND game_timestamp >= ? AND game_timestamp <= ?",
       )
@@ -79,6 +79,34 @@ export default class RRTrackerV2 extends BaseRRTracker {
         "SELECT synced_at, rr_delta, new_matches FROM rr_sync_events WHERE discord_user_id = ? ORDER BY id DESC LIMIT 1",
       )
         .bind(discordId)
+        .first(),
+      env.DB.prepare(
+        `WITH monthly AS (
+          SELECT player_id,
+                 COALESCE(SUM(rr_change), 0) AS monthly_rr,
+                 COUNT(*) AS games_counted
+          FROM rr_matches
+          WHERE game_timestamp >= ? AND game_timestamp < ?
+          GROUP BY player_id
+        ), ranked AS (
+          SELECT l.discord_user_id,
+                 ROW_NUMBER() OVER (
+                   ORDER BY COALESCE(m.monthly_rr, 0) DESC,
+                            COALESCE(m.games_counted, 0) DESC,
+                            p.riot_name COLLATE NOCASE ASC
+                 ) AS position,
+                 COUNT(*) OVER () AS total_players
+          FROM dojo_riot_links l
+          JOIN dojo_members dm
+            ON dm.discord_user_id = l.discord_user_id AND dm.active = 1
+          JOIN players p ON p.id = l.player_id
+          LEFT JOIN monthly m ON m.player_id = l.player_id
+        )
+        SELECT position, total_players
+        FROM ranked
+        WHERE discord_user_id = ?`,
+      )
+        .bind(monthStart.toISOString(), monthEnd.toISOString(), discordId)
         .first(),
     ]);
 
@@ -122,6 +150,12 @@ export default class RRTrackerV2 extends BaseRRTracker {
       current_streak: calculateCurrentStreak(dailyRows.map((row) => row.day), now),
       activity,
       first_tracked_at: firstTrackedAt,
+      leaderboard_position: leaderboardPlace?.position == null
+        ? null
+        : Number(leaderboardPlace.position),
+      leaderboard_count: leaderboardPlace?.total_players == null
+        ? null
+        : Number(leaderboardPlace.total_players),
       last_sync: lastSync
         ? {
             synced_at: lastSync.synced_at,

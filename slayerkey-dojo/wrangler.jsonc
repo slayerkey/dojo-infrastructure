@@ -1,10 +1,14 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "slayerkey-dojo",
-  "main": "src/index-v16.js",
+  "main": "src/index-v17.js",
   "compatibility_date": "2026-08-21",
   "workers_dev": true,
   "keep_vars": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "vars": {
     "DISCORD_APP_ID": "1539767359596662875",
     "DISCORD_PUBLIC_KEY": "ae55c54e219e3bc1b3560aad76bacb5f6b507f73e7449e168f08e193fc4f2f44",

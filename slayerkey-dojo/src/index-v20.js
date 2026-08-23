@@ -61,7 +61,7 @@ export default {
           );
         }
 
-        if (!env.RR_TRACKER?.getLeaderboardPage) {
+        if (!env.RR_TRACKER) {
           return ephemeralMessage("The leaderboard service is updating right now. Try again in a moment.");
         }
 
@@ -100,7 +100,7 @@ export default {
         );
       }
 
-      if (!env.RR_TRACKER?.getLeaderboardPage) {
+      if (!env.RR_TRACKER) {
         return ephemeralMessage("The leaderboard service is updating right now. Try again in a moment.");
       }
 
@@ -287,12 +287,12 @@ function parseLeaderboardComponent(customId) {
   const value = String(customId || "");
   if (!value.startsWith(`${COMPONENT_PREFIX}:`)) return null;
   const parts = value.split(":");
-  if (parts.length !== 6) return null;
+  if (parts.length !== 5) return null;
   const ownerId = String(parts[2] || "");
   const action = String(parts[3] || "");
   const page = Math.max(1, Number(parts[4]) || 1);
   if (!/^\d+$/.test(ownerId)) return null;
-  if (!new Set(["prev", "me", "next"]).has(action)) return null;
+  if (!["prev", "me", "next"].includes(action)) return null;
   return { ownerId, action, page };
 }
 

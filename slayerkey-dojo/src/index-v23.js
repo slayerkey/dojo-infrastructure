@@ -109,8 +109,8 @@ export default {
 
           await editOriginalInteraction(interaction, env, {
             content: timedOut
-              ? `The Riot tracker took too long to answer for **${escapeDiscord(normalizedName)}#${escapeDiscord(normalizedTag)}**. Nothing was linked. Try again in about 30 seconds. Reference: **${traceId}**`
-              : `I could not finish linking that Riot account. Nothing was linked. Try again in a moment. Reference: **${traceId}**`,
+              ? `The Riot tracker took too long to answer for **${escapeDiscord(normalizedName)}#${escapeDiscord(normalizedTag)}**. Wait about 30 seconds, then run **/rr** to see whether the link finished before trying **/linkriot** again. Reference: **${traceId}**`
+              : `I could not finish linking that Riot account. Try again in a moment. Reference: **${traceId}**`,
             embeds: [],
           }).catch(() => {});
         }),
@@ -136,7 +136,7 @@ export default {
           timeout_seconds: LINK_TIMEOUT_MS / 1000,
           cooldown_storage: "memory-only",
           kv_writes: false,
-          stage_logging: true,
+          result_logging: true,
         };
         return Response.json(body, { status: response.status });
       } catch {
@@ -206,7 +206,7 @@ function buildLinkPayload(result, traceId) {
     }
     if (result?.code === "MMR_HISTORY_FAILED") {
       return {
-        content: `I found the Riot account, but the ranked history service did not answer correctly. Nothing was linked. Try again shortly. Reference: **${traceId}**`,
+        content: `I found the Riot account, but the ranked history service did not answer correctly. The Discord link was not saved. Try again shortly. Reference: **${traceId}**`,
         embeds: [],
       };
     }

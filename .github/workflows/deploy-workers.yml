@@ -1,0 +1,55 @@
+name: Deploy Dojo Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dojo-rr-tracker/**"
+      - "slayerkey-dojo/**"
+      - ".github/workflows/deploy-workers.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dojo-workers
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            dojo-rr-tracker/package-lock.json
+            slayerkey-dojo/package-lock.json
+
+      - name: Install RR tracker dependencies
+        working-directory: dojo-rr-tracker
+        run: npm install
+
+      - name: Deploy RR tracker first
+        working-directory: dojo-rr-tracker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
+
+      - name: Install Discord worker dependencies
+        working-directory: slayerkey-dojo
+        run: npm install
+
+      - name: Deploy Discord worker second
+        working-directory: slayerkey-dojo
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy

@@ -27,10 +27,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            dojo-rr-tracker/package-lock.json
-            slayerkey-dojo/package-lock.json
 
       - name: Install RR tracker dependencies
         working-directory: dojo-rr-tracker

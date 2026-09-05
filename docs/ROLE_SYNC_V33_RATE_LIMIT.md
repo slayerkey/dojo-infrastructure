@@ -1,0 +1,1 @@
+Discord HTTP 429 during a bulk tenure-role backfill is expected API throttling, not proof that the member/tenure calculation is wrong. v33 avoids treating it as a fatal sync error by persisting pending role mutations and applying only a few per cron pass.

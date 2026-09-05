@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "slayerkey-dojo",
-  "main": "src/index-v32.js",
+  "main": "src/index-v33.js",
   "compatibility_date": "2026-08-21",
   "workers_dev": true,
   "keep_vars": true,

@@ -1,0 +1,1 @@
+Expected behavior: `/memberroles` only compares current Discord roles to the desired annual/tenure roles. It does not create role definitions. Any required add/remove operations are queued and applied gradually by the existing every-minute cron. Re-running while a job is active should report the existing job rather than start a second bulk mutation pass.

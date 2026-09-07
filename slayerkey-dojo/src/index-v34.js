@@ -2,7 +2,10 @@ import legacy, { DiscordGateway as DiscordGatewayV33 } from "./index-v33.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
+const COMMAND_RECHECK_MS = 6 * 60 * 60 * 1000;
 const encoder = new TextEncoder();
+let nextCommandEnsureAt = 0;
+
 const UNLINK_COMMAND = {
   name: "unlinkriot",
   description: "Unlink your current Riot account while keeping your RR history",
@@ -80,6 +83,7 @@ export default {
           unlink_command: "/unlinkriot",
           unlink_history_policy: "preserve-rr-history",
           same_puuid_rename: "automatic",
+          command_registration_check: "in-memory-six-hour",
           worker_version: "v34",
         };
         return Response.json(body, { status: response.status });
@@ -96,13 +100,20 @@ export default {
       await legacy.scheduled(controller, env, ctx);
     }
 
+    if (Date.now() < nextCommandEnsureAt) return;
+
     // Older layers may perform their own command reconciliation in waitUntil().
     // Give that maintenance a moment to finish, then ensure only this new command
-    // exists. This avoids bulk-overwriting the newer command set.
+    // exists. Recheck occasionally rather than doing a Discord API read every minute.
     await sleep(2500);
-    await ensureUnlinkCommand(env).catch((error) => {
-      console.error("Could not ensure /unlinkriot registration:", error);
-    });
+    await ensureUnlinkCommand(env)
+      .then(() => {
+        nextCommandEnsureAt = Date.now() + COMMAND_RECHECK_MS;
+      })
+      .catch((error) => {
+        nextCommandEnsureAt = Date.now() + 10 * 60 * 1000;
+        console.error("Could not ensure /unlinkriot registration:", error);
+      });
   },
 };
 

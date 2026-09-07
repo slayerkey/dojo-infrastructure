@@ -1,0 +1,28 @@
+name: Validate Dojo Worker
+
+on:
+  pull_request:
+    paths:
+      - "slayerkey-dojo/**"
+      - ".github/workflows/validate-dojo.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: slayerkey-dojo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Wrangler
+        run: npm install
+      - name: Syntax check new worker layers
+        run: |
+          node --check src/index-v37.js
+          node --check src/index-v38.js
+      - name: Wrangler dry run
+        run: npx wrangler deploy --dry-run

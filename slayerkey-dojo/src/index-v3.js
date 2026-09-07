@@ -1,4 +1,4 @@
-import legacy from "./index-v2.js";
+import legacy from "./index-v2-event.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const ENHANCED_COMMANDS_VERSION = "2026-08-21-v3";

@@ -311,3 +311,95 @@ test("first-win modal submission is idempotent and never creates a second first 
   assert.equal(laterAttempt.already_recorded, true);
   assert.equal(values.get("activation:v3:member:100").first_win_at, "2026-09-04T00:00:00.000Z");
 });
+
+
+test("manual Day 3 outreach suppresses duplicate Day 3 nudges but still escalates on Day 7", () => {
+  const contacted = applyInterventionAction(
+    null,
+    "contacted_day3",
+    "2026-09-04T00:00:00.000Z",
+    "owner-mark-day3",
+  ).state;
+
+  const day4 = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 1 },
+    interventions: { "100": contacted },
+    now: new Date("2026-09-05T00:00:00.000Z"),
+  });
+  assert.equal(day4.queue.day3.length, 0);
+  assert.equal(day4.queue.day7.length, 0);
+
+  const day7 = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 1 },
+    interventions: { "100": contacted },
+    now: new Date("2026-09-08T00:00:00.000Z"),
+  });
+  assert.equal(day7.queue.day3.length, 0);
+  assert.equal(day7.queue.day7.length, 1);
+});
+
+test("manual Day 7 outreach suppresses duplicate nudges for seven days and then can resurface", () => {
+  const contacted = applyInterventionAction(
+    null,
+    "contacted_day7",
+    "2026-09-08T00:00:00.000Z",
+    "owner-mark-day7",
+  ).state;
+
+  const withinCooldown = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 0 },
+    interventions: { "100": contacted },
+    now: new Date("2026-09-12T00:00:00.000Z"),
+  });
+  assert.equal(withinCooldown.queue.day7.length, 0);
+  assert.equal(withinCooldown.queue.dormant.length, 0);
+
+  const afterCooldown = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 0 },
+    interventions: { "100": contacted },
+    now: new Date("2026-09-16T00:00:01.000Z"),
+  });
+  assert.equal(afterCooldown.queue.day7.length, 1);
+});
+
+test("replayed team application modal stays idempotent after the draft is deleted", async () => {
+  const { storage } = mockStorage();
+  const gateway = { ctx: { storage } };
+
+  await saveTeamApplicationDraft(gateway, "100", {
+    region: "NA",
+    current_rank: "Gold 3",
+    peak_rank: "Platinum 2",
+    created_at: new Date().toISOString(),
+  });
+
+  const fields = {
+    role_agents: "Duelist — Jett",
+    availability: "Evenings MST",
+    tracker_link: "https://tracker.gg/valorant/profile/replay-test",
+    team_goal: "Play consistent Premier.",
+  };
+  const identity = {
+    discord_user_id: "100",
+    display_name: "Replay Test",
+    username: "replaytest",
+    last_identity_seen_at: new Date().toISOString(),
+  };
+
+  const first = await completeTeamApplication(gateway, "100", "same-modal", fields, identity);
+  assert.equal(first.ok, true);
+  assert.equal(first.duplicate, false);
+
+  const retry = await completeTeamApplication(gateway, "100", "same-modal", fields, identity);
+  assert.equal(retry.ok, true);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.application.submitted_at, first.application.submitted_at);
+});

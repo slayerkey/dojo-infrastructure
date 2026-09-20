@@ -293,3 +293,21 @@ test("thread cache stores only activation destination threads", async () => {
   await noteThreadEvent(gateway, { id: "thread-2", parent_id: "1532854569946583300", owner_id: "100" });
   assert.equal(values.get("activation:v3:thread:thread-2").destination_key, "wins");
 });
+
+
+test("forum milestones do not fall back to direct-channel credit when thread owner is unknown", () => {
+  for (const destinationKey of ["introductions", "training", "goals", "wins"]) {
+    let r = record();
+    r = core.applyActivationMessage(r, {
+      message: message("100", "2026-09-01T05:00:00Z"),
+      destinationKey,
+      threadOwnerId: null,
+      isThread: true,
+    });
+    const d = core.deriveMember(r);
+    if (destinationKey === "introductions") assert.equal(d.introduction_posted, false);
+    if (destinationKey === "training") assert.equal(d.first_training_post, false);
+    if (destinationKey === "goals") assert.equal(d.goal_posted, false);
+    if (destinationKey === "wins") assert.equal(d.first_win_posted, false);
+  }
+});

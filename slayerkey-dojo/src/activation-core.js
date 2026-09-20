@@ -17,9 +17,11 @@ const DESTINATION_BY_ID = new Map(Object.entries(ACTIVATION_DESTINATIONS).map(([
 export async function noteThreadEvent(gateway, payload) {
   if (!payload?.id) return;
   const parentId = String(payload.parent_id || "");
+  const destinationKey = DESTINATION_BY_ID.get(parentId) || null;
+  if (!destinationKey) return;
   await gateway.ctx.storage.put(`${THREAD_PREFIX}${payload.id}`, {
-    parent_id: parentId || null,
-    destination_key: DESTINATION_BY_ID.get(parentId) || null,
+    parent_id: parentId,
+    destination_key: destinationKey,
     owner_id: payload.owner_id ? String(payload.owner_id) : null,
     updated_at: new Date().toISOString(),
   });
@@ -33,6 +35,12 @@ export async function recordLiveActivationMessage(gateway, message) {
 
   const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
   let record = await gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`);
+
+  // Do not create activation records for ordinary Discord participants. A live
+  // event is eligible only if this Discord user already belongs to the known
+  // Dojo membership cohort or has an existing activation record.
+  if (!record && !tenure) return { recorded: false, reason: "not_known_dojo_member" };
+
   record = mergeTenureIntoRecord(record, userId, tenure);
   if (!record.activation_started_at) {
     record.unknown_anchor_activity_seen_at = earliestIso(record.unknown_anchor_activity_seen_at, message.timestamp);

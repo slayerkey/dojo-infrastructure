@@ -104,7 +104,7 @@ export function buildActivationV40Model({
     if (identity.discord_user_id) currentIdentities.set(identity.discord_user_id, identity);
   }
 
-  const queue = { day3: [], day7: [], stuck: [], dormant: [] };
+  const queue = { day3: [], day7: [], stuck: [], dormant: [], attention: [] };
   let activatedWithinSeven = 0;
   let activationDenominator = 0;
   let everWin = 0;
@@ -160,25 +160,49 @@ export function buildActivationV40Model({
 
     if (snoozed) continue;
 
-    if (!firstWin && intervention?.status === "stuck") {
-      queue.stuck.push(entry);
-      continue;
+    const isStuck = !firstWin && intervention?.status === "stuck";
+    const isDay7NoWin = !firstWin && anchor && elapsedMs >= 7 * DAY_MS;
+    const isDay3NoWin = !firstWin && anchor && elapsedMs >= 3 * DAY_MS && elapsedMs < 7 * DAY_MS;
+    const isDormant = activityCount === 0;
+
+    // These signals deliberately overlap. A member can be both "no first win"
+    // and "0 messages in 7 days"; hiding one behind the other made the old
+    // "Dormant" count misleading.
+    if (isStuck) queue.stuck.push(entry);
+    if (isDay7NoWin && !recentDay7Contact) queue.day7.push(entry);
+    if (
+      isDay3NoWin &&
+      intervention?.status !== "contacted_day3" &&
+      intervention?.status !== "contacted_day7"
+    ) {
+      queue.day3.push(entry);
     }
-    if (!firstWin && anchor && elapsedMs >= 7 * DAY_MS) {
-      if (!recentDay7Contact) queue.day7.push(entry);
-      continue;
+    if (isDormant) queue.dormant.push(entry);
+
+    if (isStuck || isDay7NoWin || isDay3NoWin || isDormant) {
+      queue.attention.push({
+        ...entry,
+        needs_first_win: !firstWin && Boolean(anchor) && elapsedMs >= 3 * DAY_MS,
+        no_win_stage: isDay7NoWin ? "day7" : (isDay3NoWin ? "day3" : null),
+        dormant: isDormant,
+        stuck: isStuck,
+      });
     }
-    if (!firstWin && anchor && elapsedMs >= 3 * DAY_MS) {
-      if (intervention?.status !== "contacted_day3" && intervention?.status !== "contacted_day7") {
-        queue.day3.push(entry);
-      }
-      continue;
-    }
-    if (activityCount === 0) queue.dormant.push(entry);
   }
 
-  for (const list of Object.values(queue)) {
+  for (const [key, list] of Object.entries(queue)) {
     list.sort((a, b) => {
+      if (key === "attention") {
+        const aPriority =
+          (a.needs_first_win && a.dormant ? 4 : 0) +
+          (a.no_win_stage === "day7" ? 2 : a.no_win_stage === "day3" ? 1 : 0) +
+          (a.dormant ? 1 : 0);
+        const bPriority =
+          (b.needs_first_win && b.dormant ? 4 : 0) +
+          (b.no_win_stage === "day7" ? 2 : b.no_win_stage === "day3" ? 1 : 0) +
+          (b.dormant ? 1 : 0);
+        if (aPriority !== bPriority) return bPriority - aPriority;
+      }
       const aDays = Number.isFinite(a.days_since_activation) ? a.days_since_activation : -1;
       const bDays = Number.isFinite(b.days_since_activation) ? b.days_since_activation : -1;
       return bDays - aDays || a.display_name.localeCompare(b.display_name);

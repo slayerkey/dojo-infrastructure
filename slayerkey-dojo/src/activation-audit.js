@@ -14,6 +14,7 @@ const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
 const COMMAND_VERSION = "activation-v3";
 const COMMAND_STATE_KEY = "activation:v3:command-registration";
+const COMMAND_RECHECK_MS = 6 * 60 * 60 * 1000;
 const encoder = new TextEncoder();
 
 export {
@@ -140,7 +141,11 @@ export async function ensureActivationCommandsOnce(env, stub) {
 export async function claimActivationCommandRegistration(gateway, version) {
   const now = Date.now();
   const state = await gateway.ctx.storage.get(COMMAND_STATE_KEY);
-  if (state?.status === "complete" && state?.version === version) return false;
+  if (
+    state?.status === "complete" &&
+    state?.version === version &&
+    Date.parse(state?.updated_at || "") > now - COMMAND_RECHECK_MS
+  ) return false;
   if (state?.status === "running" && state?.version === version && Number(state?.claimed_at || 0) > now - 10 * 60 * 1000) {
     return false;
   }

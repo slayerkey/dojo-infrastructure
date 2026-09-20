@@ -270,3 +270,44 @@ test("team application inbox rejects a channel-level public override on a privat
   };
   assert.equal(isPrivateTextChannel(publicOverride, "guild", parent), false);
 });
+
+
+test("first-win modal submission is idempotent and never creates a second first win", async () => {
+  const { values, storage } = mockStorage([
+    ["tenure:100", { discord_user_id: "100", first_eligible_at: anchor, active: true }],
+  ]);
+  const gateway = {
+    ctx: { storage },
+    async getTenureRecord(userId) { return values.get(`tenure:${userId}`) || null; },
+  };
+
+  const first = await recordActivationCheckinWin(
+    gateway,
+    "100",
+    "2026-09-04T00:00:00.000Z",
+    "win-interaction-1",
+    { discord_user_id: "100", username: "winner", last_identity_seen_at: "2026-09-04T00:00:00.000Z" },
+  );
+  assert.equal(first.ok, true);
+  assert.equal(first.already_recorded, false);
+
+  const retry = await recordActivationCheckinWin(
+    gateway,
+    "100",
+    "2026-09-04T00:01:00.000Z",
+    "win-interaction-1",
+    { discord_user_id: "100", username: "winner", last_identity_seen_at: "2026-09-04T00:01:00.000Z" },
+  );
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.already_recorded, true);
+
+  const laterAttempt = await recordActivationCheckinWin(
+    gateway,
+    "100",
+    "2026-09-06T00:00:00.000Z",
+    "win-interaction-2",
+    { discord_user_id: "100", username: "winner", last_identity_seen_at: "2026-09-06T00:00:00.000Z" },
+  );
+  assert.equal(laterAttempt.already_recorded, true);
+  assert.equal(values.get("activation:v3:member:100").first_win_at, "2026-09-04T00:00:00.000Z");
+});

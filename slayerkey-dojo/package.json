@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "node --test tests/activation-v39.test.mjs",
+    "check:v39": "node --check src/activation-core.js && node --check src/activation-backfill.js && node --check src/activation-audit.js && node --check src/index-v39.js && node --test tests/activation-v39.test.mjs && wrangler deploy --dry-run"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

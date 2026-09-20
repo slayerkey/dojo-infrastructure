@@ -1,0 +1,134 @@
+: [];
+  const resolved = {
+    introductions: ACTIVATION_DESTINATIONS.introductions,
+    general: ACTIVATION_DESTINATIONS.general,
+    goals: ACTIVATION_DESTINATIONS.goals,
+    wins: ACTIVATION_DESTINATIONS.wins,
+    tasks: ACTIVATION_DESTINATIONS.training,
+  };
+
+  for (const [key, aliases] of Object.entries(CHANNEL_ALIASES)) {
+    const match = list.find((channel) => {
+      if (![0, 5, 15, 16].includes(Number(channel?.type))) return false;
+      const normalized = normalizeChannelName(channel?.name);
+      return aliases.some((alias) => {
+        const target = normalizeChannelName(alias);
+        return normalized === target || normalized.endsWith(target);
+      });
+    });
+    if (match?.id) resolved[key] = String(match.id);
+  }
+
+  const unresolved = Object.keys(CHANNEL_ALIASES).filter((key) => !resolved[key]);
+  return { channels: resolved, unresolved, guild_id: String(guildId || "") };
+}
+
+export function buildRoadmapCard(config = {}) {
+  const startHere = channelMention(config?.channels?.start_here);
+  const content = [
+    "## 🧭 Your 90 Day Improvement Roadmap",
+    startHere
+      ? `Your full roadmap and instructions stay in ${startHere}. This channel is your **personal progress shortcut**.`
+      : "Your full roadmap stays in Start Here. This channel is your **personal progress shortcut**.",
+    "",
+    "The Dojo Bot automatically checks off the actions it can verify. For a few offline/manual steps, you can mark them complete yourself.",
+    "",
+    "### 🏆 Main goal",
+    "**Post your first win during your first week.**",
+    "",
+    "Click below anytime to see exactly what's done, what's next, and jump straight to the right channel.",
+  ].join("\n");
+
+  const components = [{
+    type: 1,
+    components: [{
+      type: 2, style: 1, custom_id: "roadmap:v41:view", label: "View My Progress", emoji: { name: "🧭" },
+    }],
+  }];
+
+  if (config?.channels?.start_here && config?.guild_id) {
+    components[0].components.push({
+      type: 2, style: 5,
+      url: discordChannelUrl(config.guild_id, config.channels.start_here),
+      label: "Full Roadmap",
+    });
+  }
+
+  return { content, components, allowed_mentions: { parse: [] } };
+}
+
+export function buildRoadmapModel(state) {
+  const activation = state?.activation || {};
+  const manual = new Set(state?.manual?.completed || []);
+  const channels = state?.config?.channels || {};
+
+  const tasks = [
+    task("first-hour", "Watch the onboarding video", manual.has("onboarding_watched"), markdownLink("Onboarding video", ONBOARDING_URL), "onboarding_watched"),
+    task("first-hour", "Introduce yourself", Boolean(activation.introduction_posted), channelMention(channels.introductions)),
+    task("first-hour", "Respond to two other members", Boolean(activation.replied_to_two_members), channelMention(channels.introductions)),
+    task("first-hour", "Complete Day 1 of the 7-Day Fundamentals Sprint", manual.has("day1_sprint"), markdownLink("Day 1 Fundamentals", FUNDAMENTALS_URL), "day1_sprint"),
+    task("first-hour", "Submit your Day 1 task", Boolean(activation.first_training_post), channelMention(channels.tasks)),
+
+    task("first-day", "Adopt the STD server tag", manual.has("server_tag"), "Server name → Server Tag → Adopt Tag", "server_tag"),
+    task("first-day", "Mark Interested on an upcoming event", manual.has("event_interest"), "Events tab below the server banner", "event_interest"),
+    task("first-day", "Link your Riot account", Boolean(activation.riot_linked), joinPieces(["Run `/linkriot` in", channelMention(channels.bots)])),
+    task("first-day", "Welcome someone or join a conversation", Boolean(activation.first_general_message), channelMention(channels.general)),
+    task("first-day", "Post your goals for this year", Boolean(activation.goal_posted), channelMention(channels.goals)),
+
+    task("first-week", "Complete Days 2–7 of the 7-Day Fundamentals Sprint", manual.has("days2_7_sprint"), markdownLink("Days 2–7 Fundamentals", FUNDAMENTALS_URL), "days2_7_sprint"),
+    task("first-week", "Submit your Day 2–7 tasks", manual.has("days2_7_tasks"), channelMention(channels.tasks), "days2_7_tasks"),
+    task("first-week", "Post your Week 1 Win", Boolean(activation.first_win_posted), channelMention(channels.wins), null, true),
+  ];
+
+  const completed = tasks.filter((item) => item.done).length;
+  const next = tasks.find((item) => !item.done) || null;
+  return {
+    tasks, completed, total: tasks.length, next,
+    win_complete: Boolean(activation.first_win_posted),
+    win_within_7_days: Boolean(activation.first_win_within_7_days),
+    team_application: state?.team_application || null,
+    channels,
+  };
+}
+
+async function buildRoadmapView(userId, env, stub) {
+  const state = await stub.getRoadmapV41State(userId);
+  if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
+  const model = buildRoadmapModel(state);
+  const content = formatRoadmapView(model);
+  const manualCompleted = new Set(state.manual?.completed || []);
+
+  const components = [];
+  const actionButtons = [{
+    type: 2, style: 2, custom_id: "roadmap:v41:refresh", label: "Refresh Progress", emoji: { name: "🔄" },
+  }];
+  if (!model.win_complete) {
+    actionButtons.unshift({
+      type: 2, style: 3, custom_id: "actv40:win", label: "Post My First Win", emoji: { name: "🏆" },
+    });
+  }
+  components.push({ type: 1, components: actionButtons });
+
+  components.push({
+    type: 1,
+    components: [{
+      type: 3,
+      custom_id: "roadmap:v41:manual",
+      placeholder: "Mark manual steps complete",
+      min_values: 0,
+      max_values: MANUAL_ITEMS.length,
+      options: MANUAL_ITEMS.map((item) => ({
+        label: item.label, value: item.value, default: manualCompleted.has(item.value),
+      })),
+    }],
+  });
+
+  if (model.channels?.start_here) {
+    components.push({
+      type: 1,
+      components: [{
+        type: 2, style: 5,
+        url: discordChannelUrl(env.DISCORD_GUILD_ID, model.channels.start_here),
+        label: "Open Full Roadmap",
+      }],
+    });

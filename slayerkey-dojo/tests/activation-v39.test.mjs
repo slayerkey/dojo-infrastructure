@@ -5,7 +5,7 @@ import {
   __test as core,
   SEVEN_DAYS_MS,
 } from "../src/activation-core.js";
-import { getRetryAfterMs } from "../src/activation-backfill.js";
+import { beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
 
@@ -162,4 +162,30 @@ test("Discord 429 retry behavior uses the larger retry_after signal with a one-s
   const headers = { get(name) { return name === "X-RateLimit-Reset-After" ? "2.5" : null; } };
   assert.equal(getRetryAfterMs({ retry_after: 1.2 }, headers), 2500);
   assert.equal(getRetryAfterMs({}, { get() { return null; } }), 1000);
+});
+
+
+test("backfill start/resume is idempotent and does not clear member records", async () => {
+  const values = new Map([["activation:v3:member:100", { discord_user_id: "100", first_win_at: "2026-09-02T00:00:00.000Z" }]]);
+  const storage = {
+    async get(key) { return values.get(key); },
+    async put(key, value) { values.set(key, structuredClone(value)); },
+  };
+  const gateway = { ctx: { storage } };
+
+  const first = await beginActivationBackfill(gateway);
+  assert.equal(first.status, "running");
+  assert.equal(first.phase, "seed");
+
+  const running = { ...first, phase: "scan", source_index: 3, status: "running" };
+  values.set("activation:v3:backfill", running);
+  const resumed = await beginActivationBackfill(gateway);
+  assert.equal(resumed.phase, "scan");
+  assert.equal(resumed.source_index, 3);
+  assert.equal(values.get("activation:v3:member:100").first_win_at, "2026-09-02T00:00:00.000Z");
+
+  values.set("activation:v3:backfill", { ...resumed, status: "complete", phase: "complete" });
+  const rerun = await beginActivationBackfill(gateway);
+  assert.equal(rerun.phase, "seed");
+  assert.equal(values.get("activation:v3:member:100").first_win_at, "2026-09-02T00:00:00.000Z");
 });

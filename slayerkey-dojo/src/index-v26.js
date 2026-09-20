@@ -1,4 +1,5 @@
 import legacy, { DiscordGateway as DiscordGatewayV25 } from "./index-v25.js";
+import { identityFromGuildMember, resolveDisplayName, summarizeActivity } from "./activation-v40-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -72,7 +73,7 @@ export default {
       ctx.waitUntil(
         postActivityReport(env, String(interaction.channel_id || ""), { manual: true })
           .then((summary) => editOriginalInteraction(interaction, env, {
-            content: `Activity report posted. **${summary.zero}** member(s) had 0 messages and **${summary.low}** had 1–4 messages.`,
+            content: `Activity report posted. **${summary.zero}** had 0 messages, **${summary.low}** had 1–4, and **${summary.active}** had 5+.`,
           }))
           .catch(async (error) => {
             console.error("activitycheck failed:", error);
@@ -271,43 +272,50 @@ async function postActivityReport(env, channelId, { manual = false } = {}) {
   const stub = env.DISCORD_GATEWAY.getByName("dojo-main");
   const totals = await stub.getActivityCounts(dateKeys);
 
+  const summary = summarizeActivity(members, totals);
   const zero = [];
   const low = [];
   for (const member of members) {
     const id = String(member.user?.id || "");
     if (!id) continue;
-    const count = Number(totals?.[id] || 0);
-    if (count === 0) zero.push({ id, count });
-    else if (count < LOW_ACTIVITY_THRESHOLD) low.push({ id, count });
+    const count = Number(summary.by_user?.[id] || 0);
+    const identity = identityFromGuildMember(member);
+    const displayName = resolveDisplayName(id, identity, null);
+    if (count === 0) zero.push({ id, count, display_name: displayName });
+    else if (count < LOW_ACTIVITY_THRESHOLD) low.push({ id, count, display_name: displayName });
   }
-  low.sort((a, b) => a.count - b.count || a.id.localeCompare(b.id));
+  zero.sort((a, b) => a.display_name.localeCompare(b.display_name));
+  low.sort((a, b) => a.count - b.count || a.display_name.localeCompare(b.display_name));
 
   const range = `${dateKeys[dateKeys.length - 1]} → ${dateKeys[0]}`;
   const lines = [
     `## ${manual ? "Dojo Activity Check" : "Weekly Dojo Activity Check"}`,
     `**Period:** ${range} (Arizona)`,
-    `**Dojo members checked:** ${members.length}`,
+    `**Current Dojo members:** ${summary.total}`,
+    `**0 messages:** ${summary.zero}`,
+    `**1–4 messages:** ${summary.low}`,
+    `**5+ messages:** ${summary.active}`,
     "",
   ];
 
   if (zero.length) {
     lines.push("### 🔴 No messages this week");
-    for (const item of zero) lines.push(`<@${item.id}> • 0 messages`);
+    for (const item of zero) lines.push(`${item.display_name} • 0 messages`);
     lines.push("");
   }
   if (low.length) {
     lines.push("### 🟡 Fewer than 5 messages");
-    for (const item of low) lines.push(`<@${item.id}> • ${item.count} message${item.count === 1 ? "" : "s"}`);
+    for (const item of low) lines.push(`${item.display_name} • ${item.count} message${item.count === 1 ? "" : "s"}`);
     lines.push("");
   }
   if (!zero.length && !low.length) {
     lines.push("✅ Everyone with the Dojo role sent at least 5 messages during this period.", "");
   }
-  lines.push("Only members who currently have the Dojo role are included. Message content is not stored, only counts.");
+  lines.push("Only current members with the Dojo role are included. Message content is not stored, only counts.");
 
   const chunks = chunkDiscordLines(lines, 1900);
   for (const content of chunks) await sendChannelMessage(channelId, content, env);
-  return { checked: members.length, zero: zero.length, low: low.length };
+  return { checked: summary.total, zero: summary.zero, low: summary.low, active: summary.active };
 }
 
 async function fetchDojoMembers(env) {

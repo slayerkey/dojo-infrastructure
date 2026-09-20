@@ -6,6 +6,7 @@ import {
   applyInterventionAction,
   buildActivationV40Model,
   identityFromGuildMember,
+  isPrivateTextChannel,
   resolveDisplayName,
   summarizeActivity,
   validateTeamApplication,
@@ -252,4 +253,20 @@ test("v40 owner queue formatting never creates a raw Discord user mention", () =
   });
   assert.equal(line.includes("<@"), false);
   assert.equal(line.includes("@unknown-user"), false);
+});
+
+
+test("team application inbox rejects a channel-level public override on a private category", () => {
+  const parent = {
+    type: 4,
+    permission_overwrites: [{ id: "guild", type: 0, deny: "1024", allow: "0" }],
+  };
+  const inheritedPrivate = { type: 0, permission_overwrites: [] };
+  assert.equal(isPrivateTextChannel(inheritedPrivate, "guild", parent), true);
+
+  const publicOverride = {
+    type: 0,
+    permission_overwrites: [{ id: "guild", type: 0, deny: "0", allow: "1024" }],
+  };
+  assert.equal(isPrivateTextChannel(publicOverride, "guild", parent), false);
 });

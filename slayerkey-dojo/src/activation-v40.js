@@ -27,7 +27,10 @@ const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
 const encoder = new TextEncoder();
 
 export const PROPOSED_FIRST_WIN_DM =
-  "Hey {name} — quick Dojo check-in. The goal is to get your first real win from the roadmap, not just consume lessons. How's it going so far?";
+  "Hey {name} — quick Dojo check-in. I want to make sure you're getting an actual win from the roadmap, not just going through lessons. How's it going so far? Open the Dojo Discord and run **/wincheckin** — it gives you 3 one-tap options.";
+
+const FIRST_WIN_CHECKIN_PROMPT =
+  "Quick Dojo check-in: have you gotten a real win from the roadmap yet, are you stuck, or have you just not had much time to play?";
 
 export const V40_COMMANDS = Object.freeze([
   {
@@ -141,7 +144,7 @@ export async function handleV40Interaction(request, env, ctx) {
     return Response.json({
       type: 4,
       data: {
-        content: buildCheckinText(resolveInteractionName(interaction)),
+        content: buildCheckinPrompt(resolveInteractionName(interaction)),
         flags: EPHEMERAL,
         components: checkinButtons(false),
         allowed_mentions: { parse: [] },
@@ -528,7 +531,7 @@ async function runCheckinPreview(interaction, targetId, env, stub) {
   const currentIdentity = target ? identityFromGuildMember(target) : null;
   const name = resolveDisplayName(targetId, currentIdentity, stored);
   await editOriginalInteraction(interaction, env, {
-    content: `## First-Win Check-In Preview\n**Member:** ${name}\n\n${buildCheckinText(name)}\n\n_No DM was sent. This is a preview only._`,
+    content: `## First-Win Check-In Preview\n**Member:** ${name}\n\n**Copy/paste this DM manually:**\n${buildProposedDm(name)}\n\n_No DM was sent. Automated DMs are disabled._`,
     components: checkinButtons(true),
   });
 }
@@ -653,8 +656,13 @@ function formatQueueMember(member) {
   return `**${escapeDiscord(member.display_name)}** — ${days} · Training ${training} · Goal ${goal} · Win ${win} · 7d msgs ${member.messages_last_7_days}${last}`;
 }
 
-function buildCheckinText(name) {
+function buildProposedDm(name) {
   return PROPOSED_FIRST_WIN_DM.replace("{name}", escapeDiscord(name || "there"));
+}
+
+function buildCheckinPrompt(name) {
+  const safeName = escapeDiscord(name || "there");
+  return `**${safeName}**, ${FIRST_WIN_CHECKIN_PROMPT}`;
 }
 
 function checkinButtons(disabled) {
@@ -971,7 +979,8 @@ function safeError(error) {
 }
 
 export const __test = Object.freeze({
-  buildCheckinText,
+  buildCheckinPrompt,
+  buildProposedDm,
   checkinButtons,
   commandSignature,
   formatQueueMember,

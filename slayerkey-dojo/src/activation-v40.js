@@ -24,6 +24,8 @@ const INTERVENTION_PREFIX = "activation:v40:intervention:";
 const TEAM_CONFIG_KEY = "teamapp:v40:config";
 const TEAM_DRAFT_PREFIX = "teamapp:v40:draft:";
 const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
+const TEAM_PUBLIC_CARD_KEY = "teamapp:v41:public-card";
+const PREMIER_INFO_MESSAGE_URL = "https://discord.com/channels/1494446702378221590/1529539108597268510/1529545999889072322";
 const encoder = new TextEncoder();
 
 export const PROPOSED_FIRST_WIN_DM =
@@ -90,6 +92,11 @@ export const V40_COMMANDS = Object.freeze([
     description: "Set this private channel as the Premier application inbox",
     type: 1,
   },
+  {
+    name: "premier-buttons-setup",
+    description: "Post or refresh the public Premier application buttons in this channel",
+    type: 1,
+  },
 ]);
 
 export async function handleV40Interaction(request, env, ctx) {
@@ -104,7 +111,7 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:");
   if (!isV40) return null;
@@ -158,6 +165,12 @@ export async function handleV40Interaction(request, env, ctx) {
     return deferredEphemeral();
   }
 
+  if (command === "premier-buttons-setup") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can configure Premier application buttons.");
+    ctx.waitUntil(setupPremierPublicCard(interaction, env, stub).catch((error) => failInteraction(interaction, env, "Premier button setup failed", error)));
+    return deferredEphemeral();
+  }
+
   if (command === "teamapply") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to apply for a team.");
     const draft = {
@@ -169,6 +182,19 @@ export async function handleV40Interaction(request, env, ctx) {
     const saved = await stub.saveTeamApplicationDraft(userId, draft).catch(() => null);
     if (!saved?.ok) return ephemeralMessage("I could not start the team application right now. Try again in a moment.");
     return teamApplicationModal();
+  }
+
+  if (customId === "teamapp:v41:start:NA" || customId === "teamapp:v41:start:EU") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to apply for a team.");
+    const region = customId.endsWith(":EU") ? "EU" : "NA";
+    const draft = {
+      region,
+      created_at: new Date().toISOString(),
+      source: "premier_public_button",
+    };
+    const saved = await stub.saveTeamApplicationDraft(userId, draft).catch(() => null);
+    if (!saved?.ok) return ephemeralMessage("I could not start the team application right now. Try again in a moment.");
+    return quickTeamApplicationModal(region);
   }
 
   if (customId.startsWith("actv40:mark-sent:")) {
@@ -231,6 +257,40 @@ export async function handleV40Interaction(request, env, ctx) {
           components: [],
         }))
         .catch((error) => failInteraction(interaction, env, "Your win was recorded, but the Wins post failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
+  if (customId === "teamapp:v41:quick-submit") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to submit a team application.");
+    const fields = {
+      current_rank: modalValue(interaction, "current_rank"),
+      peak_rank: modalValue(interaction, "peak_rank"),
+      role_agents: modalValue(interaction, "role_agents"),
+      availability: modalValue(interaction, "availability"),
+      tracker_link: modalValue(interaction, "tracker_link"),
+      team_goal: null,
+    };
+    let application;
+    try {
+      application = await stub.completeTeamApplication(
+        userId,
+        String(interaction.id || ""),
+        fields,
+        identityFromInteraction(interaction),
+      );
+    } catch (error) {
+      return ephemeralMessage(`Application could not be saved: ${safeError(error)}`);
+    }
+    if (!application?.ok) return ephemeralMessage(application?.message || "Application could not be saved.");
+    if (application.duplicate) return ephemeralMessage("Your Premier team application was already submitted. I did not create a duplicate.");
+
+    ctx.waitUntil(
+      publishTeamApplication(application.application, env, stub)
+        .then(() => editOriginalInteraction(interaction, env, {
+          content: "Your Premier team application was submitted privately to the team application inbox.",
+        }))
+        .catch((error) => failInteraction(interaction, env, "Application saved, but staff delivery failed", error)),
     );
     return deferredEphemeral();
   }

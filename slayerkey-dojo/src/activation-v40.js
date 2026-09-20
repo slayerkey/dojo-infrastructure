@@ -793,8 +793,24 @@ function commandSignature(command) {
     name: command?.name,
     description: command?.description,
     type: command?.type,
-    options: command?.options || [],
+    options: normalizeCommandOptions(command?.options || []),
   });
+}
+
+function normalizeCommandOptions(options) {
+  return (Array.isArray(options) ? options : []).map((option) => ({
+    name: option?.name,
+    description: option?.description,
+    type: option?.type,
+    required: Boolean(option?.required),
+    max_length: option?.max_length ?? null,
+    min_length: option?.min_length ?? null,
+    choices: (Array.isArray(option?.choices) ? option.choices : []).map((choice) => ({
+      name: choice?.name,
+      value: choice?.value,
+    })),
+    options: normalizeCommandOptions(option?.options || []),
+  }));
 }
 
 function getOption(interaction, name) {

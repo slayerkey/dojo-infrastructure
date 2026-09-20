@@ -126,6 +126,11 @@ export function buildActivationV40Model({
       validIso(intervention?.snooze_until) &&
       Date.parse(intervention.snooze_until) > safeNowMs,
     );
+    const recentDay7Contact = Boolean(
+      intervention?.status === "contacted_day7" &&
+      validIso(intervention?.last_intervention_at) &&
+      Date.parse(intervention.last_intervention_at) > safeNowMs - 7 * DAY_MS,
+    );
     const displayName = resolveDisplayName(userId, currentIdentity, record);
 
     if (!anchor) unknownStart += 1;
@@ -160,11 +165,13 @@ export function buildActivationV40Model({
       continue;
     }
     if (!firstWin && anchor && elapsedMs >= 7 * DAY_MS) {
-      queue.day7.push(entry);
+      if (!recentDay7Contact) queue.day7.push(entry);
       continue;
     }
     if (!firstWin && anchor && elapsedMs >= 3 * DAY_MS) {
-      queue.day3.push(entry);
+      if (intervention?.status !== "contacted_day3" && intervention?.status !== "contacted_day7") {
+        queue.day3.push(entry);
+      }
       continue;
     }
     if (activityCount === 0) queue.dormant.push(entry);
@@ -220,6 +227,9 @@ export function applyInterventionAction(previous, action, now = new Date().toISO
     next.snooze_until = new Date(Date.parse(timestamp) + CHECKIN_SNOOZE_MS).toISOString();
   } else if (action === "win") {
     next.status = "activated";
+    next.snooze_until = null;
+  } else if (action === "contacted_day3" || action === "contacted_day7") {
+    next.status = action;
     next.snooze_until = null;
   }
   return { state: next, duplicate: false };

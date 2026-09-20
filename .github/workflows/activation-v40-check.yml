@@ -1,0 +1,40 @@
+name: Activation v40 validation
+
+on:
+  push:
+    branches:
+      - feat/activation-v40
+    paths:
+      - "slayerkey-dojo/**"
+      - ".github/workflows/activation-v40-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: activation-v40-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: slayerkey-dojo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --ignore-scripts
+
+      - name: Run v40 validation
+        run: npm run check:v40

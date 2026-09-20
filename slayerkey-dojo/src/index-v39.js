@@ -27,7 +27,7 @@ export default {
       try { interaction = JSON.parse(await request.text()); } catch {}
       const legacyResponse = await legacy.fetch(delegated, env, ctx);
 
-      if (interaction?.type === 2 && String(interaction?.data?.name || "") === "linkriot") {
+      if (legacyResponse.ok && interaction?.type === 2 && String(interaction?.data?.name || "") === "linkriot") {
         const discordUserId = String(interaction?.member?.user?.id || interaction?.user?.id || "");
         const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
         if (discordUserId && stub) {

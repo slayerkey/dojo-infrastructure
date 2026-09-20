@@ -1,153 +1,300 @@
+import {
+  buildActivationAudit,
+  noteThreadEvent,
+  observeRiotLink,
+  recordLiveActivationMessage,
+} from "./activation-core.js";
+import {
+  beginActivationBackfill,
+  getActivationBackfillStatus,
+  processActivationBackfillBatch,
+} from "./activation-backfill.js";
+
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
+const COMMAND_VERSION = "activation-v3";
+const COMMAND_STATE_KEY = "activation:v3:command-registration";
 const encoder = new TextEncoder();
 
-export const ACTIVATION_CHANNELS = {
-  introductions: "1540019496314474566",
-  general: "1532854321723478217",
-  goals: "1538607897658003546",
-  wins: "1532854569946583300",
-  training: "1541188454010978315",
-  start: "1532855733333266614",
+export {
+  beginActivationBackfill,
+  getActivationBackfillStatus,
+  noteThreadEvent,
+  observeRiotLink,
+  processActivationBackfillBatch,
+  recordLiveActivationMessage,
 };
 
-export const ACTIVATION_AUDIT_COMMAND = {
-  name: "activation-audit",
-  description: "Review read only activation milestones for Dojo members",
-  type: 1,
-};
+export const ACTIVATION_COMMANDS = Object.freeze([
+  {
+    name: "activation-audit",
+    description: "Review stored Dojo activation milestones",
+    type: 1,
+  },
+  {
+    name: "activation-backfill",
+    description: "Start or resume the Dojo activation history backfill",
+    type: 1,
+  },
+  {
+    name: "activation-backfill-status",
+    description: "Show Dojo activation backfill progress",
+    type: 1,
+  },
+]);
 
-export async function handleActivationAuditRequest(request, env, ctx) {
+export async function handleActivationInteraction(request, env, ctx) {
   const rawBody = await request.text();
-  if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) return new Response("Invalid signature", { status: 401 });
-
   let interaction;
-  try { interaction = JSON.parse(rawBody); } catch { return new Response("Invalid JSON", { status: 400 }); }
-  if (interaction?.type !== 2 || interaction?.data?.name !== ACTIVATION_AUDIT_COMMAND.name) return null;
-  if (String(interaction.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) return ephemeralMessage("This command is only available inside the Dojo server.");
-  if (String(interaction.member?.user?.id || interaction.user?.id || "") !== String(env.DISCORD_OWNER_USER_ID || "")) return ephemeralMessage("Only the configured owner can run this audit.");
+  try {
+    interaction = JSON.parse(rawBody);
+  } catch {
+    return null;
+  }
 
-  const reportChannelId = String(interaction.channel_id || "");
-  const task = runAudit(env, env.DISCORD_GATEWAY?.getByName("dojo-main"), reportChannelId).catch(async (error) => {
-    console.error("Activation audit failed:", error);
-    await sendChannelMessage(reportChannelId, `Activation audit failed: ${safeError(error)}`, env).catch(() => {});
+  const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
+  if (!ACTIVATION_COMMANDS.some((item) => item.name === command)) return null;
+
+  if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
+    return new Response("Invalid request signature", { status: 401 });
+  }
+
+  const userId = String(interaction?.member?.user?.id || interaction?.user?.id || "");
+  if (userId !== String(env.DISCORD_OWNER_USER_ID || "")) {
+    return ephemeralMessage("Only the Dojo owner can use this command.");
+  }
+  if (String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
+    return ephemeralMessage("This command only works in the Slayerkey Discord server.");
+  }
+
+  const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
+  if (!stub) return ephemeralMessage("Activation storage is unavailable right now.");
+
+  if (command === "activation-audit") {
+    ctx.waitUntil(
+      runAuditInteraction(interaction, env, stub).catch(async (error) => {
+        console.error("activation audit failed:", error);
+        await editOriginalInteraction(interaction, env, {
+          content: `Activation audit failed: ${safeError(error)}`,
+        }).catch(() => {});
+      }),
+    );
+    return deferredEphemeral();
+  }
+
+  if (command === "activation-backfill") {
+    ctx.waitUntil(
+      stub.beginActivationBackfill()
+        .then((status) => editOriginalInteraction(interaction, env, {
+          content: formatBackfillStatus(status, "Activation backfill started or resumed."),
+        }))
+        .catch(async (error) => {
+          console.error("activation backfill start failed:", error);
+          await editOriginalInteraction(interaction, env, {
+            content: `Could not start activation backfill: ${safeError(error)}`,
+          }).catch(() => {});
+        }),
+    );
+    return deferredEphemeral();
+  }
+
+  ctx.waitUntil(
+    stub.getActivationBackfillStatus()
+      .then((status) => editOriginalInteraction(interaction, env, {
+        content: formatBackfillStatus(status),
+      }))
+      .catch(async (error) => {
+        await editOriginalInteraction(interaction, env, {
+          content: `Could not read activation backfill status: ${safeError(error)}`,
+        }).catch(() => {});
+      }),
+  );
+  return deferredEphemeral();
+}
+
+export async function ensureActivationCommandsOnce(env, stub) {
+  if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
+  const claimed = await stub.claimActivationCommandRegistration(COMMAND_VERSION).catch(() => false);
+  if (!claimed) return;
+
+  try {
+    const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
+    const existing = await discordJson(base, env);
+    const byName = new Map((Array.isArray(existing) ? existing : []).map((item) => [String(item?.name || ""), item]));
+
+    for (const command of ACTIVATION_COMMANDS) {
+      const current = byName.get(command.name);
+      if (!current) {
+        await discordJson(base, env, { method: "POST", body: JSON.stringify(command) });
+      } else if (String(current.description || "") !== command.description) {
+        await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
+      }
+    }
+    await stub.completeActivationCommandRegistration(COMMAND_VERSION);
+  } catch (error) {
+    await stub.failActivationCommandRegistration(COMMAND_VERSION, safeError(error)).catch(() => {});
+    throw error;
+  }
+}
+
+export async function claimActivationCommandRegistration(gateway, version) {
+  const now = Date.now();
+  const state = await gateway.ctx.storage.get(COMMAND_STATE_KEY);
+  if (state?.status === "complete" && state?.version === version) return false;
+  if (state?.status === "running" && state?.version === version && Number(state?.claimed_at || 0) > now - 10 * 60 * 1000) {
+    return false;
+  }
+  await gateway.ctx.storage.put(COMMAND_STATE_KEY, {
+    version,
+    status: "running",
+    claimed_at: now,
+    updated_at: new Date(now).toISOString(),
+    error: null,
   });
-  ctx?.waitUntil?.(task);
-  return ephemeralMessage("Running a read only activation audit. The report will be posted in this channel when ready.");
+  return true;
 }
 
-export async function ensureActivationAuditCommand(env) {
-  const url = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
-  const existing = await discordJson(url, env);
-  if (!Array.isArray(existing) || !existing.some((item) => item?.name === ACTIVATION_AUDIT_COMMAND.name)) {
-    await discordJson(url, env, { method: "POST", body: JSON.stringify(ACTIVATION_AUDIT_COMMAND) });
-  }
+export async function completeActivationCommandRegistration(gateway, version) {
+  await gateway.ctx.storage.put(COMMAND_STATE_KEY, {
+    version,
+    status: "complete",
+    updated_at: new Date().toISOString(),
+    error: null,
+  });
 }
 
-async function runAudit(env, stub, reportChannelId) {
-  if (!stub) throw new Error("Discord gateway is not configured.");
-  const members = await fetchDojoMembers(env);
-  const results = [];
-  for (const member of members) {
-    const userId = String(member.user?.id || "");
-    if (!userId) continue;
-    const tenure = await stub.getTenureRecord?.(userId).catch(() => null);
-    const messages = await fetchMemberMessages(userId, env);
-    results.push(buildMemberResult(userId, member.user?.username || userId, tenure, messages));
-  }
+export async function failActivationCommandRegistration(gateway, version, error) {
+  await gateway.ctx.storage.put(COMMAND_STATE_KEY, {
+    version,
+    status: "error",
+    updated_at: new Date().toISOString(),
+    error: String(error || "unknown").slice(0, 300),
+  });
+}
 
-  const lines = ["## Activation Audit", `Members checked: ${results.length}`, "Read only. Message content is not stored.", ""];
-  for (const item of results) {
-    lines.push(
-      `**${item.name}** <@${item.user_id}>`,
-      `Introduction: ${mark(item.introduction)}`,
-      `Replies to members: ${item.reply_members}/2`,
-      `Training channel activity: ${mark(item.training_activity)}`,
-      `Riot linked: ${mark(item.riot_linked)}`,
-      `General message: ${mark(item.general)}`,
-      `Goals posted: ${mark(item.goals)}`,
-      `First qualifying win: ${item.first_win || "Not detected"}`,
-      `Wins in first 7 days: ${item.wins_first_7_days}`,
-      "",
+export async function getActivationAuditSnapshot(gateway) {
+  return buildActivationAudit(gateway);
+}
+
+async function runAuditInteraction(interaction, env, stub) {
+  const report = await stub.getActivationAuditSnapshot();
+  const backfill = report?.backfill_status || await stub.getActivationBackfillStatus().catch(() => null);
+  const aggregate = formatAuditSummary(report, backfill);
+  await editOriginalInteraction(interaction, env, { content: aggregate });
+
+  const detailLines = ["## Members missing milestones"];
+  for (const member of report.members || []) {
+    const missing = [];
+    if (!member.anchor_valid) {
+      missing.push("activation start unknown");
+    } else {
+      if (!member.introduction_posted) missing.push("introduction");
+      if (!member.replied_to_two_members) missing.push("2 intro interactions");
+      if (!member.first_training_post) missing.push("training post");
+      if (!member.first_general_message) missing.push("general message");
+      if (!member.goal_posted) missing.push("goal");
+      if (!member.first_win_posted) missing.push("win");
+      else if (!member.first_win_within_7_days) missing.push("win within 7d");
+    }
+    if (!member.riot_linked) missing.push("Riot link not observed");
+    if (!missing.length) continue;
+    detailLines.push(
+      `<@${member.discord_user_id}>${member.membership_active === false ? " (inactive)" : ""}: ${missing.join(", ")}`,
     );
   }
-  for (const chunk of chunkLines(lines, 1900)) await sendChannelMessage(reportChannelId, chunk, env);
-  return results;
+
+  if (detailLines.length === 1) detailLines.push("No stored members are missing tracked milestones.");
+  for (const chunk of chunkLines(detailLines, 1850)) {
+    await sendEphemeralFollowup(interaction, env, chunk);
+  }
 }
 
-function buildMemberResult(userId, name, tenure, messages) {
-  const byChannel = (key) => messages.filter((message) => message.channel_id === ACTIVATION_CHANNELS[key]);
-  const wins = byChannel("wins").filter(isQualifyingWin);
-  const firstEligible = Date.parse(tenure?.first_eligible_at || "");
-  const firstSevenEnd = Number.isFinite(firstEligible) ? firstEligible + 7 * 86400000 : null;
-  const firstSevenWins = wins.filter((message) => {
-    const timestamp = Date.parse(message.timestamp || "");
-    return firstSevenEnd !== null && timestamp >= firstEligible && timestamp <= firstSevenEnd;
-  });
-  const replies = new Set(messages.filter((message) => message.author?.id === userId && message.message_reference?.message_id && message.referenced_message?.author?.id && message.referenced_message.author.id !== userId).map((message) => message.referenced_message.author.id));
+function formatAuditSummary(report, backfill) {
+  const lines = [
+    "## Dojo Activation Audit",
+    `**Backfill:** ${backfill?.status || "idle"}${backfill?.phase ? ` (${backfill.phase})` : ""}`,
+  ];
+  if (backfill?.status !== "complete") {
+    lines.push("⚠️ Historical results are incomplete until the activation backfill finishes.");
+  }
+  lines.push(
+    `**Members represented:** ${Number(report?.total_members || 0)}`,
+    `**Valid Dojo start date:** ${Number(report?.valid_anchor_members || 0)}`,
+    `**Unknown start date:** ${Number(report?.unknown_anchor_members || 0)}`,
+    "",
+  );
 
-  return {
-    user_id: userId,
-    name,
-    introduction: byChannel("introductions").length > 0,
-    reply_members: Math.min(replies.size, 2),
-    training_activity: byChannel("training").length > 0,
-    riot_linked: false,
-    general: byChannel("general").length > 0,
-    goals: byChannel("goals").length > 0,
-    first_win: wins[0]?.timestamp?.slice(0, 10) || null,
-    wins_first_7_days: firstSevenWins.length,
-  };
-}
-
-function isQualifyingWin(message) {
-  const content = String(message.content || "").toLowerCase();
-  return /\b(win|won|victory|victorious)\b/.test(content) || /[🏆🥇]/u.test(content);
-}
-
-async function fetchMemberMessages(userId, env) {
-  const output = [];
-  for (const channelId of Object.values(ACTIVATION_CHANNELS)) {
-    let before = "";
-    for (let page = 0; page < 10; page += 1) {
-      const query = new URLSearchParams({ limit: "100" });
-      if (before) query.set("before", before);
-      const pageItems = await discordJson(`${DISCORD_API}/channels/${channelId}/messages?${query}`, env);
-      if (!Array.isArray(pageItems) || pageItems.length === 0) break;
-      output.push(...pageItems.filter((message) => message.author?.id === userId));
-      const last = pageItems[pageItems.length - 1]?.id;
-      if (!last || pageItems.length < 100) break;
-      before = String(last);
+  for (const metric of report?.metrics || []) {
+    if (metric.key === "riot_linked") {
+      lines.push(`**${metric.label}:** at least ${metric.numerator}/${metric.denominator} (${formatPercent(metric.percentage)})`);
+    } else {
+      lines.push(`**${metric.label}:** ${metric.numerator}/${metric.denominator} (${formatPercent(metric.percentage)})`);
     }
   }
-  return output.sort((a, b) => Date.parse(a.timestamp || 0) - Date.parse(b.timestamp || 0));
+  lines.push(
+    "",
+    `**Median time to first training post:** ${formatHours(report?.median_hours_to_training)}`,
+    `**Median time to first win:** ${formatHours(report?.median_hours_to_win)}`,
+    "",
+    `_${report?.riot_note || "Riot milestone data may be historically incomplete."}_`,
+  );
+  return lines.join("\n").slice(0, 1950);
 }
 
-async function fetchDojoMembers(env) {
-  const output = [];
-  let after = "0";
-  while (true) {
-    const page = await discordJson(`${DISCORD_API}/guilds/${env.DISCORD_GUILD_ID}/members?limit=1000&after=${after}`, env);
-    if (!Array.isArray(page)) break;
-    for (const member of page) {
-      if (!member.user?.bot && member.roles?.map(String).includes(String(env.DISCORD_DOJO_ROLE_ID))) output.push(member);
-    }
-    if (page.length < 1000) break;
-    const next = String(page[page.length - 1]?.user?.id || "");
-    if (!next || next === after) break;
-    after = next;
-  }
-  return output;
-}
-
-async function sendChannelMessage(channelId, content, env) {
-  return discordJson(`${DISCORD_API}/channels/${channelId}/messages`, env, { method: "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) });
+export function formatBackfillStatus(status, prefix = "") {
+  const state = status || {};
+  const parts = [
+    prefix,
+    "## Activation Backfill",
+    `**Status:** ${state.status || "idle"}`,
+    `**Phase:** ${state.phase || "not started"}`,
+    `**Seeded members:** ${Number(state.seeded_members || 0)}`,
+    `**Sources discovered:** ${Array.isArray(state.sources) ? state.sources.length : 0}`,
+    `**Sources completed:** ${Number(state.processed_sources || 0)}`,
+    `**Messages scanned:** ${Number(state.processed_messages || 0)}`,
+    `**Riot checks processed:** ${Number(state.riot_index || 0)}`,
+    state.rate_limit_until ? `**Rate-limit pause until:** ${state.rate_limit_until}` : null,
+    state.last_error ? `**Last error:** ${state.last_error}` : null,
+    state.completed_at ? `**Completed:** ${state.completed_at}` : null,
+  ].filter(Boolean);
+  return parts.join("\n").slice(0, 1950);
 }
 
 async function discordJson(url, env, options = {}) {
-  const response = await fetch(url, { ...options, headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`, "Content-Type": "application/json", ...(options.headers || {}) } });
-  if (!response.ok) throw new Error(`Discord API ${response.status}: ${(await response.text()).slice(0, 180)}`);
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bot ${env.DISCORD_BOT_TOKEN}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) throw new Error(`Discord API ${response.status}: ${(await response.text()).slice(0, 240)}`);
   return response.status === 204 ? null : response.json();
+}
+
+async function editOriginalInteraction(interaction, env, payload) {
+  const response = await fetch(
+    `${DISCORD_API}/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(payload || {}), allowed_mentions: { parse: [] } }),
+    },
+  );
+  if (!response.ok) throw new Error(`Could not edit activation interaction: ${response.status} ${await response.text()}`);
+}
+
+async function sendEphemeralFollowup(interaction, env, content) {
+  const response = await fetch(
+    `${DISCORD_API}/webhooks/${env.DISCORD_APP_ID}/${interaction.token}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, flags: EPHEMERAL, allowed_mentions: { parse: [] } }),
+    },
+  );
+  if (!response.ok) throw new Error(`Could not send activation followup: ${response.status} ${await response.text()}`);
 }
 
 async function verifyDiscordSignature(headers, rawBody, publicKeyHex) {
@@ -155,19 +302,72 @@ async function verifyDiscordSignature(headers, rawBody, publicKeyHex) {
   const timestamp = headers.get("X-Signature-Timestamp");
   if (!signature || !timestamp || !publicKeyHex) return false;
   try {
-    const key = await crypto.subtle.importKey("raw", hexToBytes(publicKeyHex), { name: "Ed25519" }, false, ["verify"]);
-    return crypto.subtle.verify("Ed25519", key, hexToBytes(signature), encoder.encode(timestamp + rawBody));
-  } catch { return false; }
+    const key = await crypto.subtle.importKey(
+      "raw",
+      hexToBytes(publicKeyHex),
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    return crypto.subtle.verify(
+      "Ed25519",
+      key,
+      hexToBytes(signature),
+      encoder.encode(timestamp + rawBody),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function hexToBytes(hex) {
-  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2) throw new Error("Invalid hex");
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < hex.length; index += 2) bytes[index / 2] = Number.parseInt(hex.slice(index, index + 2), 16);
+  const value = String(hex || "").trim();
+  if (!/^[0-9a-fA-F]+$/.test(value) || value.length % 2) throw new Error("Invalid hex");
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < value.length; index += 2) bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
   return bytes;
 }
 
-function ephemeralMessage(content) { return Response.json({ type: 4, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } } }); }
-function mark(value) { return value ? "Yes" : "No"; }
-function chunkLines(lines, max) { const chunks = []; let current = ""; for (const line of lines) { const next = current ? `${current}\n${line}` : line; if (next.length > max && current) { chunks.push(current); current = line; } else current = next; } if (current) chunks.push(current); return chunks; }
-function safeError(error) { return String(error?.message || error || "Unknown error").slice(0, 240); }
+function deferredEphemeral() {
+  return Response.json({ type: 5, data: { flags: EPHEMERAL } });
+}
+
+function ephemeralMessage(content) {
+  return Response.json({ type: 4, data: { content, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
+}
+
+function chunkLines(lines, max) {
+  const chunks = [];
+  let current = "";
+  for (const line of lines) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length > max && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function formatPercent(value) {
+  return Number.isFinite(value) ? `${value}%` : "n/a";
+}
+
+function formatHours(value) {
+  if (!Number.isFinite(value)) return "Not enough data";
+  if (value < 24) return `${Math.round(value * 10) / 10}h`;
+  return `${Math.round((value / 24) * 10) / 10}d`;
+}
+
+function safeError(error) {
+  return String(error?.message || error || "Unknown error").slice(0, 300);
+}
+
+export const __test = Object.freeze({
+  chunkLines,
+  formatBackfillStatus,
+  formatAuditSummary,
+});

@@ -1,3 +1,5 @@
+import { identityFromMessage, mergeIdentityIntoRecord } from "./activation-v40-core.js";
+
 const DISCORD_API = "https://discord.com/api/v10";
 export const STORAGE_PREFIX = "activation:v3:";
 export const MEMBER_PREFIX = `${STORAGE_PREFIX}member:`;
@@ -42,6 +44,7 @@ export async function recordLiveActivationMessage(gateway, message) {
   if (!record && !tenure) return { recorded: false, reason: "not_known_dojo_member" };
 
   record = mergeTenureIntoRecord(record, userId, tenure);
+  record = mergeIdentityIntoRecord(record, identityFromMessage(message));
   if (!record.activation_started_at) {
     record.unknown_anchor_activity_seen_at = earliestIso(record.unknown_anchor_activity_seen_at, message.timestamp);
     record.updated_at = new Date().toISOString();
@@ -106,7 +109,7 @@ export async function buildActivationAudit(gateway) {
 }
 
 export function applyActivationMessage(record, { message, destinationKey, threadOwnerId = null, isThread = false }) {
-  const next = { ...(record || {}) };
+  const next = mergeIdentityIntoRecord({ ...(record || {}) }, identityFromMessage(message));
   const userId = String(message?.author?.id || next.discord_user_id || "");
   const timestamp = validIso(message?.timestamp) ? new Date(message.timestamp).toISOString() : null;
   const anchor = validIso(next.activation_started_at) ? new Date(next.activation_started_at).toISOString() : null;

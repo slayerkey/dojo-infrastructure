@@ -171,6 +171,23 @@ export async function handleV40Interaction(request, env, ctx) {
     return teamApplicationModal();
   }
 
+  if (customId.startsWith("actv40:mark-sent:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can mark activation outreach.");
+    const [, , stage, targetId] = customId.split(":");
+    if (!["day3", "day7"].includes(stage) || !targetId) return ephemeralMessage("That outreach action is invalid.");
+    const action = stage === "day7" ? "contacted_day7" : "contacted_day3";
+    const result = await stub.applyActivationIntervention(targetId, action, String(interaction.id || ""));
+    if (!result?.ok) return ephemeralMessage(result?.message || "I could not record that outreach.");
+    return Response.json({
+      type: 7,
+      data: {
+        content: `Marked the **${stage === "day7" ? "Day 7" : "Day 3"}** first-win check-in as manually sent for Discord ID **${targetId}**. No DM was sent by the bot.`,
+        components: [],
+        allowed_mentions: { parse: [] },
+      },
+    });
+  }
+
   if (customId === "actv40:win") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to submit a win.");
     return firstWinModal();
@@ -238,6 +255,7 @@ export async function handleV40Interaction(request, env, ctx) {
       return ephemeralMessage(`Application could not be saved: ${safeError(error)}`);
     }
     if (!application?.ok) return ephemeralMessage(application?.message || "Application could not be saved.");
+    if (application.duplicate) return ephemeralMessage("Your Premier team application was already submitted. I did not create a duplicate.");
 
     ctx.waitUntil(
       publishTeamApplication(application.application, env, stub)
@@ -429,6 +447,12 @@ export async function saveTeamApplicationDraft(gateway, discordUserId, draft) {
 
 export async function completeTeamApplication(gateway, discordUserId, interactionId, fields, identity) {
   const userId = String(discordUserId || "");
+  const key = `${TEAM_APPLICATION_PREFIX}${userId}`;
+  const existing = await gateway.ctx.storage.get(key);
+  if (existing?.last_interaction_id === String(interactionId || "")) {
+    return { ok: true, duplicate: true, application: existing };
+  }
+
   const draftKey = `${TEAM_DRAFT_PREFIX}${userId}`;
   const draft = await gateway.ctx.storage.get(draftKey);
   if (!draft) return { ok: false, message: "Your team application draft expired. Run /teamapply again." };
@@ -438,11 +462,6 @@ export async function completeTeamApplication(gateway, discordUserId, interactio
   }
 
   const validated = validateTeamApplication({ ...draft, ...(fields || {}) });
-  const key = `${TEAM_APPLICATION_PREFIX}${userId}`;
-  const existing = await gateway.ctx.storage.get(key);
-  if (existing?.last_interaction_id === String(interactionId || "")) {
-    return { ok: true, duplicate: true, application: existing };
-  }
 
   const application = {
     version: 1,
@@ -534,15 +553,31 @@ async function runV40Queue(interaction, env, stub) {
 }
 
 async function runCheckinPreview(interaction, targetId, env, stub) {
-  const members = await fetchCurrentDojoMembers(env);
-  const target = members.find((member) => String(member?.user?.id || "") === String(targetId || ""));
-  const snapshot = await stub.getActivationV40Snapshot();
-  const stored = (snapshot?.records || []).find((record) => String(record?.discord_user_id || "") === String(targetId || ""));
+  const runtime = await buildV40Runtime(env, stub);
+  const target = runtime.members.find((member) => String(member?.user?.id || "") === String(targetId || ""));
+  const stored = (runtime.snapshot?.records || []).find((record) => String(record?.discord_user_id || "") === String(targetId || ""));
   const currentIdentity = target ? identityFromGuildMember(target) : null;
   const name = resolveDisplayName(targetId, currentIdentity, stored);
+  const stage = runtime.model.queue.day7.some((member) => member.discord_user_id === targetId)
+    ? "day7"
+    : runtime.model.queue.day3.some((member) => member.discord_user_id === targetId)
+      ? "day3"
+      : null;
+  const components = [...checkinButtons(true)];
+  if (stage) {
+    components.push({
+      type: 1,
+      components: [{
+        type: 2,
+        style: 1,
+        custom_id: `actv40:mark-sent:${stage}:${targetId}`,
+        label: `Mark ${stage === "day7" ? "Day 7" : "Day 3"} DM Sent`,
+      }],
+    });
+  }
   await editOriginalInteraction(interaction, env, {
-    content: `## First-Win Check-In Preview\n**Member:** ${name}\n\n**Copy/paste this DM manually:**\n${buildProposedDm(name)}\n\n_No DM was sent. Automated DMs are disabled._`,
-    components: checkinButtons(true),
+    content: `## First-Win Check-In Preview\n**Member:** ${name}\n\n**Copy/paste this DM manually:**\n${buildProposedDm(name)}\n\n_No DM was sent. Automated DMs are disabled.${stage ? " After you send it manually, click the button below so this member is not repeatedly nudged at the same stage." : ""}_`,
+    components,
   });
 }
 
@@ -616,6 +651,15 @@ async function publishFirstWin(interaction, improved, helped, env, stub) {
 async function publishTeamApplication(application, env, stub) {
   const config = await stub.getTeamApplicationConfig();
   if (!config?.channel_id) throw new Error("No private team application channel is configured. Run /teamapply-setup in the staff channel.");
+
+  const channel = await discordJson(`${DISCORD_API}/channels/${config.channel_id}`, env);
+  const parent = channel?.parent_id
+    ? await discordJson(`${DISCORD_API}/channels/${channel.parent_id}`, env).catch(() => null)
+    : null;
+  if (!isPrivateTextChannel(channel, env.DISCORD_GUILD_ID, parent)) {
+    throw new Error("The configured team application inbox is no longer private. Re-run /teamapply-setup in a private staff channel.");
+  }
+
   const message = await discordJson(`${DISCORD_API}/channels/${config.channel_id}/messages`, env, {
     method: "POST",
     body: JSON.stringify({

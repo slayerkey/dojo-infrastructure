@@ -432,7 +432,6 @@ export async function completeTeamApplication(gateway, discordUserId, interactio
     return { ok: true, duplicate: true, application: existing };
   }
 
-  const normalizedIdentity = identityFromMessage({ author: identity || {}, member: { nick: identity?.display_name || null } });
   const application = {
     version: 1,
     discord_user_id: userId,
@@ -446,7 +445,7 @@ export async function completeTeamApplication(gateway, discordUserId, interactio
     last_interaction_id: String(interactionId || ""),
     application_message_id: null,
   };
-  const enriched = mergeIdentityIntoRecord(application, { ...normalizedIdentity, ...identity, discord_user_id: userId });
+  const enriched = mergeIdentityIntoRecord(application, { ...(identity || {}), discord_user_id: userId });
   await gateway.ctx.storage.put(key, enriched);
   await gateway.ctx.storage.delete(draftKey);
   return { ok: true, duplicate: false, application: enriched };

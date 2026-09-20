@@ -1,0 +1,131 @@
+import {
+  ACTIVATION_DESTINATIONS,
+  MEMBER_PREFIX,
+  deriveMember,
+  mergeTenureIntoRecord,
+} from "./activation-core.js";
+
+const DISCORD_API = "https://discord.com/api/v10";
+const EPHEMERAL = 64;
+const CONFIG_KEY = "roadmap:v41:config";
+const MANUAL_PREFIX = "roadmap:v41:manual:";
+const COMMAND_STATE_KEY = "roadmap:v41:command-registration";
+const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
+const COMMAND_RECHECK_MS = 6 * 60 * 60 * 1000;
+const encoder = new TextEncoder();
+
+export const ONBOARDING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_EbCc3zaRKmonI/lessons/lesn_7emHFEKsx8iY4/";
+export const FUNDAMENTALS_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_EbCc3zaRKmonI/lessons/lesn_rHCBrfAAys9m8/";
+
+export const MANUAL_ITEMS = Object.freeze([
+  { value: "onboarding_watched", label: "Watched onboarding video" },
+  { value: "day1_sprint", label: "Completed Day 1 Fundamentals" },
+  { value: "server_tag", label: "Adopted the STD server tag" },
+  { value: "event_interest", label: "Marked Interested on an event" },
+  { value: "days2_7_sprint", label: "Completed Days 2–7 Fundamentals" },
+  { value: "days2_7_tasks", label: "Submitted Days 2–7 tasks" },
+]);
+
+const MANUAL_VALUES = new Set(MANUAL_ITEMS.map((item) => item.value));
+
+export const ROADMAP_COMMANDS = Object.freeze([
+  { name: "roadmap", description: "Open your personal Dojo roadmap progress", type: 1 },
+  { name: "roadmap-setup", description: "Post or refresh the persistent Dojo roadmap card in this channel", type: 1 },
+]);
+
+const CHANNEL_ALIASES = Object.freeze({
+  start_here: ["start-here", "start here", "starthere"],
+  introductions: ["introductions"],
+  tasks: ["tasks", "training-tasks", "training tasks"],
+  bots: ["bots", "bot"],
+  general: ["general"],
+  goals: ["2026-goals", "2026 goals", "goals"],
+  wins: ["wins", "win"],
+  premier_info: ["premier-info", "premier info", "premier"],
+  clips: ["clips", "clip"],
+  community_help: ["community-help", "community help", "help"],
+});
+
+export async function handleRoadmapV41Interaction(request, env) {
+  const rawBody = await request.text();
+  let interaction;
+  try { interaction = JSON.parse(rawBody); } catch { return null; }
+
+  const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
+  const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
+  const isRoadmap = command === "roadmap" || command === "roadmap-setup" || customId.startsWith("roadmap:v41:");
+  if (!isRoadmap) return null;
+
+  if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
+    return new Response("Invalid request signature", { status: 401 });
+  }
+  if (String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
+    return ephemeralMessage("This roadmap only works inside the Slayerkey Discord server.");
+  }
+
+  const userId = interactionUserId(interaction);
+  const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
+  if (!stub) return ephemeralMessage("Roadmap storage is unavailable right now.");
+
+  if (command === "roadmap-setup") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can set up the roadmap card.");
+    try {
+      const result = await setupRoadmapCard(interaction, env, stub);
+      return ephemeralMessage(result.message);
+    } catch (error) {
+      return ephemeralMessage(`Roadmap setup failed: ${safeError(error)}`);
+    }
+  }
+
+  if (command === "roadmap" || customId === "roadmap:v41:view") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
+    try {
+      const view = await buildRoadmapView(userId, env, stub);
+      return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't load your roadmap: ${safeError(error)}`);
+    }
+  }
+
+  if (customId === "roadmap:v41:refresh") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
+    try {
+      const view = await buildRoadmapView(userId, env, stub);
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't refresh your roadmap: ${safeError(error)}`);
+    }
+  }
+
+  if (customId === "roadmap:v41:manual") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to update the roadmap.");
+    const selected = (Array.isArray(interaction?.data?.values) ? interaction.data.values : [])
+      .map(String)
+      .filter((value) => MANUAL_VALUES.has(value));
+    try {
+      const saved = await stub.setRoadmapV41Manual(userId, selected, String(interaction.id || ""));
+      if (!saved?.ok) return ephemeralMessage(saved?.message || "I couldn't update that checklist.");
+      const view = await buildRoadmapView(userId, env, stub);
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't update that checklist: ${safeError(error)}`);
+    }
+  }
+
+  return null;
+}
+
+export async function ensureRoadmapV41CommandsOnce(env, stub) {
+  if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
+  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41").catch(() => false);
+  if (!claimed) return;
+
+  try {
+    const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
+    const existing = await discordJson(base, env);
+    const byName = new Map((Array.isArray(existing) ? existing : []).map((item) => [String(item?.name || ""), item]));
+    for (const command of ROADMAP_COMMANDS) {
+      const current = byName.get(command.name);
+      if (!current) {
+        await discordJson(base, env, { method: "POST", body: JSON.stringify(command) });
+   

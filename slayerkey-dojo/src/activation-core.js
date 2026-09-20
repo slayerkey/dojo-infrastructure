@@ -65,6 +65,7 @@ export async function observeRiotLink(gateway, discordUserId, source = "observed
   const result = await gateway.env.RR_TRACKER.getCurrentRiotLink(userId).catch(() => null);
   const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
   let record = await gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`);
+  if (!record && !tenure) return { ok: false, reason: "not_known_dojo_member" };
   record = mergeTenureIntoRecord(record, userId, tenure);
   record.riot_link_checked_at = new Date().toISOString();
   record.riot_linked_current = Boolean(result?.ok);

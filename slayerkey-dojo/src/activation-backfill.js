@@ -107,16 +107,27 @@ async function scanSource(gateway, state) {
   for (const message of page) {
     if (!message?.author?.id || message.author.bot) continue;
     const userId = String(message.author.id);
-    const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
-    let record = await gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`);
-    record = mergeTenureIntoRecord(record, userId, tenure);
+    const key = `${MEMBER_PREFIX}${userId}`;
+    let record = await gateway.ctx.storage.get(key);
+
+    // Historical channel participants are not automatically Dojo members. The seed
+    // phase creates records for the known membership cohort (including inactive
+    // members). Only fall back to a tenure lookup when a seeded record is missing.
+    if (!record) {
+      const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
+      if (!tenure) continue;
+      record = mergeTenureIntoRecord(null, userId, tenure);
+    }
+
     if (!record.activation_started_at) {
-      if (message.timestamp && (!record.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(record.unknown_anchor_activity_seen_at))) record.unknown_anchor_activity_seen_at = new Date(message.timestamp).toISOString();
+      if (message.timestamp && (!record.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(record.unknown_anchor_activity_seen_at))) {
+        record.unknown_anchor_activity_seen_at = new Date(message.timestamp).toISOString();
+      }
     } else {
       record = applyActivationMessage(record, { message, destinationKey: source.destination_key, threadOwnerId: source.thread_owner_id });
     }
     record.updated_at = new Date().toISOString();
-    await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, record);
+    await gateway.ctx.storage.put(key, record);
   }
   state.processed_messages += page.length;
   if (page.length < 100) {

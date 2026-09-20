@@ -136,8 +136,8 @@ test("operational queue includes only current guild members even when inactive h
     totals: { "100": 0, "200": 0 },
     now: new Date(Date.parse(anchor) + 8 * DAY_MS),
   });
-  const queuedIds = Object.values(model.queue).flat().map((item) => item.discord_user_id);
-  assert.deepEqual(queuedIds, ["100"]);
+  const queuedIds = new Set(Object.values(model.queue).flat().map((item) => item.discord_user_id));
+  assert.deepEqual([...queuedIds], ["100"]);
   assert.equal(model.historical_members, 2);
   assert.equal(model.current_members, 1);
 });
@@ -150,7 +150,7 @@ test("intervention actions dedupe the same Discord interaction", () => {
   assert.deepEqual(second.state, first.state);
 });
 
-test("stuck status is persisted and prioritized in the action queue", () => {
+test("stuck status can overlap with zero-message dormancy", () => {
   const intervention = applyInterventionAction(null, "stuck", "2026-09-04T00:00:00.000Z", "stuck-1").state;
   const model = buildActivationV40Model({
     records: [activationRecord("100")],
@@ -160,8 +160,11 @@ test("stuck status is persisted and prioritized in the action queue", () => {
     now: new Date(Date.parse(anchor) + 8 * DAY_MS),
   });
   assert.equal(model.queue.stuck.length, 1);
-  assert.equal(model.queue.day7.length, 0);
-  assert.equal(model.queue.dormant.length, 0);
+  assert.equal(model.queue.day7.length, 1);
+  assert.equal(model.queue.dormant.length, 1);
+  assert.equal(model.queue.attention.length, 1);
+  assert.equal(model.queue.attention[0].stuck, true);
+  assert.equal(model.queue.attention[0].dormant, true);
 });
 
 test("haven't-played action snoozes intervention for seven days and removes member from queue", () => {
@@ -240,19 +243,21 @@ test("team application draft completes into pending structured storage", async (
   assert.equal(values.get("teamapp:v40:application:100").tracker_link, "https://tracker.gg/valorant/profile/test");
 });
 
-test("v40 owner queue formatting never creates a raw Discord user mention", () => {
+test("v40 owner queue uses clickable mentions only for known current member IDs", () => {
   const line = v40.formatQueueMember({
+    discord_user_id: "100",
     display_name: "Example User",
     days_since_activation: 7,
-    first_training_post: false,
-    goal_posted: true,
     first_win_posted: false,
     messages_last_7_days: 0,
-    last_intervention: null,
-    last_intervention_at: null,
+    no_win_stage: "day7",
+    dormant: true,
+    stuck: false,
   });
-  assert.equal(line.includes("<@"), false);
+  assert.equal(line.includes("<@100>"), true);
   assert.equal(line.includes("@unknown-user"), false);
+  assert.match(line, /7\+ DAY NO WIN/);
+  assert.match(line, /0 MSGS \/ 7D/);
 });
 
 
@@ -358,7 +363,8 @@ test("manual Day 7 outreach suppresses duplicate nudges for seven days and then 
     now: new Date("2026-09-12T00:00:00.000Z"),
   });
   assert.equal(withinCooldown.queue.day7.length, 0);
-  assert.equal(withinCooldown.queue.dormant.length, 0);
+  assert.equal(withinCooldown.queue.dormant.length, 1);
+  assert.equal(withinCooldown.queue.attention.length, 1);
 
   const afterCooldown = buildActivationV40Model({
     records: [activationRecord("100")],
@@ -402,4 +408,32 @@ test("replayed team application modal stays idempotent after the draft is delete
   assert.equal(retry.ok, true);
   assert.equal(retry.duplicate, true);
   assert.equal(retry.application.submitted_at, first.application.submitted_at);
+});
+
+
+test("zero-message dormancy overlaps with Day 7 no-win instead of hiding it", () => {
+  const model = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 0 },
+    now: new Date(Date.parse(anchor) + 8 * DAY_MS),
+  });
+  assert.equal(model.queue.day7.length, 1);
+  assert.equal(model.queue.dormant.length, 1);
+  assert.equal(model.queue.attention.length, 1);
+  assert.equal(model.queue.attention[0].needs_first_win, true);
+  assert.equal(model.queue.attention[0].dormant, true);
+});
+
+test("quick Premier application does not require a team-goal essay", () => {
+  const result = validateTeamApplication({
+    region: "EU",
+    current_rank: "Diamond 1",
+    peak_rank: "Ascendant 1",
+    role_agents: "Initiator — Sova",
+    availability: "Weeknights CET",
+    tracker_link: "https://tracker.gg/valorant/profile/quick",
+  });
+  assert.equal(result.region, "EU");
+  assert.equal(result.team_goal, null);
 });

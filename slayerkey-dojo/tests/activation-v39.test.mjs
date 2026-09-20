@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   __test as core,
   SEVEN_DAYS_MS,
+  noteThreadEvent,
+  recordLiveActivationMessage,
 } from "../src/activation-core.js";
 import { beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
 import {
@@ -223,4 +225,71 @@ test("activation command registration dedupes, rechecks periodically, and retrie
 
   await failActivationCommandRegistration(gateway, "activation-v3", "test");
   assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), true);
+});
+
+
+test("live tracking ignores Discord users outside the known Dojo cohort", async () => {
+  const values = new Map();
+  const gateway = {
+    env: { DISCORD_BOT_TOKEN: "unused" },
+    ctx: {
+      storage: {
+        async get(key) { return values.get(key); },
+        async put(key, value) { values.set(key, value); },
+      },
+    },
+    async getTenureRecord() { return null; },
+  };
+
+  const result = await recordLiveActivationMessage(gateway, {
+    channel_id: "1532854321723478217",
+    author: { id: "999", bot: false },
+    timestamp: "2026-09-01T01:00:00.000Z",
+  });
+
+  assert.equal(result.recorded, false);
+  assert.equal(result.reason, "not_known_dojo_member");
+  assert.equal(values.size, 0);
+});
+
+test("live tracking accepts known tenure member without relying on Discord role snapshot", async () => {
+  const values = new Map();
+  const gateway = {
+    env: { DISCORD_BOT_TOKEN: "unused" },
+    ctx: {
+      storage: {
+        async get(key) { return values.get(key); },
+        async put(key, value) { values.set(key, value); },
+      },
+    },
+    async getTenureRecord(userId) {
+      return { discord_user_id: String(userId), first_eligible_at: anchor, active: true };
+    },
+  };
+
+  const result = await recordLiveActivationMessage(gateway, {
+    channel_id: "1532854321723478217",
+    author: { id: "100", bot: false },
+    timestamp: "2026-09-01T01:00:00.000Z",
+  });
+
+  assert.equal(result.recorded, true);
+  assert.equal(core.deriveMember(values.get("activation:v3:member:100")).first_general_message, true);
+});
+
+test("thread cache stores only activation destination threads", async () => {
+  const values = new Map();
+  const gateway = {
+    ctx: {
+      storage: {
+        async put(key, value) { values.set(key, value); },
+      },
+    },
+  };
+
+  await noteThreadEvent(gateway, { id: "thread-1", parent_id: "not-activation", owner_id: "100" });
+  assert.equal(values.size, 0);
+
+  await noteThreadEvent(gateway, { id: "thread-2", parent_id: "1532854569946583300", owner_id: "100" });
+  assert.equal(values.get("activation:v3:thread:thread-2").destination_key, "wins");
 });

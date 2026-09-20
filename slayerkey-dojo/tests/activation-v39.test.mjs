@@ -5,6 +5,7 @@ import {
   __test as core,
   SEVEN_DAYS_MS,
   noteThreadEvent,
+  observeRiotLink,
   recordLiveActivationMessage,
 } from "../src/activation-core.js";
 import { beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
@@ -310,4 +311,28 @@ test("forum milestones do not fall back to direct-channel credit when thread own
     if (destinationKey === "goals") assert.equal(d.goal_posted, false);
     if (destinationKey === "wins") assert.equal(d.first_win_posted, false);
   }
+});
+
+
+test("Riot activation observation ignores users outside the known Dojo cohort", async () => {
+  const values = new Map();
+  const gateway = {
+    env: {
+      RR_TRACKER: {
+        async getCurrentRiotLink() { return { ok: true, riot_id: "Test#NA1" }; },
+      },
+    },
+    ctx: {
+      storage: {
+        async get(key) { return values.get(key); },
+        async put(key, value) { values.set(key, value); },
+      },
+    },
+    async getTenureRecord() { return null; },
+  };
+
+  const result = await observeRiotLink(gateway, "999", "test");
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "not_known_dojo_member");
+  assert.equal(values.size, 0);
 });

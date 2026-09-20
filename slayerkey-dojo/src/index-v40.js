@@ -8,11 +8,13 @@ import {
   ensureV40CommandsOnce,
   failV40CommandRegistration,
   getActivationV40Snapshot,
+  getPremierPublicCardConfig,
   getTeamApplicationConfig,
   handleV40Interaction,
   hydrateActivationIdentities,
   recordActivationCheckinWin,
   saveTeamApplicationDraft,
+  setPremierPublicCardConfig,
   setTeamApplicationConfig,
   updateTeamApplicationStatus,
 } from "./activation-v40.js";
@@ -117,6 +119,14 @@ export class DiscordGateway extends DiscordGatewayV39 {
 
   async getTeamApplicationConfig() {
     return getTeamApplicationConfig(this);
+  }
+
+  async setPremierPublicCardConfig(config) {
+    return setPremierPublicCardConfig(this, config);
+  }
+
+  async getPremierPublicCardConfig() {
+    return getPremierPublicCardConfig(this);
   }
 
   async attachTeamApplicationMessage(discordUserId, messageId) {

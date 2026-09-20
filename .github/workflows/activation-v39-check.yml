@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: self-hosted
     timeout-minutes: 15
     defaults:
       run:

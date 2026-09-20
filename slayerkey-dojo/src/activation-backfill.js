@@ -1,4 +1,5 @@
 import { ACTIVATION_DESTINATIONS, MEMBER_PREFIX, STORAGE_PREFIX, applyActivationMessage, mergeTenureIntoRecord, seedTenureRecords } from "./activation-core.js";
+import { identityFromMessage, mergeIdentityIntoRecord } from "./activation-v40-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const BACKFILL_KEY = `${STORAGE_PREFIX}backfill`;
@@ -117,6 +118,7 @@ async function scanSource(gateway, state) {
 
     let next = record;
     if (!next.activation_started_at) {
+      next = mergeIdentityIntoRecord(next, identityFromMessage(message));
       if (message.timestamp && (!next.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(next.unknown_anchor_activity_seen_at))) {
         next = { ...next, unknown_anchor_activity_seen_at: new Date(message.timestamp).toISOString() };
       }

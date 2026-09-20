@@ -276,7 +276,7 @@ export function validateTeamApplication(input = {}) {
   if (!trackerLink || trackerLink.length > 500 || !/^https?:\/\//i.test(trackerLink)) {
     throw new Error("Tracker link must be a valid http(s) URL.");
   }
-  if (!goal || goal.length > 800) throw new Error("Team goal is required and must be 800 characters or fewer.");
+  if (goal && goal.length > 800) throw new Error("Team goal must be 800 characters or fewer.");
 
   return {
     region,
@@ -285,7 +285,7 @@ export function validateTeamApplication(input = {}) {
     role_agents: roleAgents,
     availability,
     tracker_link: trackerLink,
-    team_goal: goal,
+    team_goal: goal || null,
   };
 }
 

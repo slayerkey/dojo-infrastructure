@@ -202,6 +202,9 @@ export async function handleV40Interaction(request, env, ctx) {
       identity,
     );
     if (!result?.ok) return ephemeralMessage(result?.message || "I could not save that win.");
+    if (result.already_recorded || result.duplicate) {
+      return ephemeralMessage("Your first win is already recorded, so I did not create another Wins post.");
+    }
     ctx.waitUntil(
       publishFirstWin(interaction, improved, helped, env, stub)
         .then((thread) => editOriginalInteraction(interaction, env, {
@@ -394,18 +397,24 @@ export async function recordActivationCheckinWin(gateway, discordUserId, timesta
     return { ok: false, message: "The win timestamp is before the Dojo activation start date." };
   }
 
-  const previousWin = record.first_win_at;
-  record.first_win_at = earliestIso(record.first_win_at, at);
-  if (!previousWin || Date.parse(at) <= Date.parse(previousWin)) record.first_win_source = "self_report_modal";
+  const interventionKey = `${INTERVENTION_PREFIX}${userId}`;
+  const previousIntervention = await gateway.ctx.storage.get(interventionKey);
+  if (previousIntervention?.last_interaction_id === String(interactionId || "")) {
+    return { ok: true, duplicate: true, already_recorded: Boolean(record.first_win_at), record, intervention: previousIntervention };
+  }
+  if (record.first_win_at && Number.isFinite(Date.parse(record.first_win_at))) {
+    return { ok: true, duplicate: false, already_recorded: true, record, intervention: previousIntervention || null };
+  }
+
+  record.first_win_at = at;
+  record.first_win_source = "self_report_modal";
   record.first_win_self_reported_at = at;
   record.updated_at = new Date().toISOString();
   await gateway.ctx.storage.put(key, record);
 
-  const interventionKey = `${INTERVENTION_PREFIX}${userId}`;
-  const previousIntervention = await gateway.ctx.storage.get(interventionKey);
   const intervention = applyInterventionAction(previousIntervention, "win", at, interactionId);
   if (!intervention.duplicate) await gateway.ctx.storage.put(interventionKey, intervention.state);
-  return { ok: true, record, intervention: intervention.state };
+  return { ok: true, duplicate: intervention.duplicate, already_recorded: false, record, intervention: intervention.state };
 }
 
 export async function saveTeamApplicationDraft(gateway, discordUserId, draft) {

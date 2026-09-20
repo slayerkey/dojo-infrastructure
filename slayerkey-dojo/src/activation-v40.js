@@ -113,7 +113,8 @@ export async function handleV40Interaction(request, env, ctx) {
   const isV40 =
     ["activation-audit", "activation-queue", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
-    customId.startsWith("teamapp:v40:");
+    customId.startsWith("teamapp:v40:") ||
+    customId.startsWith("teamapp:v41:");
   if (!isV40) return null;
 
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
@@ -350,7 +351,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.1").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -364,9 +365,9 @@ export async function ensureV40CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeV40CommandRegistration("activation-v40");
+    await stub.completeV40CommandRegistration("activation-v40.1");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.1", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -659,6 +660,70 @@ async function buildV40Runtime(env, stub) {
   return { members, snapshot, totals, model };
 }
 
+async function setupPremierPublicCard(interaction, env, stub) {
+  const channelId = String(interaction?.channel_id || "");
+  if (!channelId) throw new Error("Missing Premier info channel.");
+
+  const previous = await stub.getPremierPublicCardConfig().catch(() => null);
+  const payload = {
+    content: [
+      "## 🤼 Apply for a Premier Team",
+      "Pick your region and fill out the short application. Your answers are sent privately to the Dojo staff inbox.",
+      "",
+      "Use the Premier info post above for the full details.",
+    ].join("\n"),
+    components: [
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 1, custom_id: "teamapp:v41:start:NA", label: "Apply — NA" },
+          { type: 2, style: 1, custom_id: "teamapp:v41:start:EU", label: "Apply — EU" },
+          { type: 2, style: 5, url: PREMIER_INFO_MESSAGE_URL, label: "Premier Info" },
+        ],
+      },
+    ],
+    allowed_mentions: { parse: [] },
+  };
+
+  let message = null;
+  if (previous?.channel_id === channelId && previous?.message_id) {
+    try {
+      message = await discordJson(`${DISCORD_API}/channels/${channelId}/messages/${previous.message_id}`, env, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+    } catch {}
+  }
+  if (!message) {
+    message = await discordJson(`${DISCORD_API}/channels/${channelId}/messages`, env, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  await stub.setPremierPublicCardConfig({
+    channel_id: channelId,
+    message_id: String(message?.id || ""),
+    info_message_url: PREMIER_INFO_MESSAGE_URL,
+    configured_by: interactionUserId(interaction),
+    configured_at: new Date().toISOString(),
+  });
+
+  await editOriginalInteraction(interaction, env, {
+    content: "Premier application buttons are live in this channel. Members can now click **Apply — NA** or **Apply — EU**.",
+  });
+}
+
+export async function setPremierPublicCardConfig(gateway, config) {
+  const next = { ...(config || {}), updated_at: new Date().toISOString() };
+  await gateway.ctx.storage.put(TEAM_PUBLIC_CARD_KEY, next);
+  return { ok: true, config: next };
+}
+
+export async function getPremierPublicCardConfig(gateway) {
+  return (await gateway.ctx.storage.get(TEAM_PUBLIC_CARD_KEY)) || null;
+}
+
 async function setupTeamApplicationChannel(interaction, env, stub) {
   const channelId = String(interaction?.channel_id || "");
   const channel = await discordJson(`${DISCORD_API}/channels/${channelId}`, env);
@@ -803,6 +868,23 @@ function firstWinModal() {
   });
 }
 
+function quickTeamApplicationModal(region) {
+  return Response.json({
+    type: 9,
+    data: {
+      custom_id: "teamapp:v41:quick-submit",
+      title: `Premier Application — ${region}`,
+      components: [
+        textInput("current_rank", "Current rank", true, 1, 2, 40, "Example: Diamond 2"),
+        textInput("peak_rank", "Peak rank", true, 1, 2, 40, "Example: Ascendant 1"),
+        textInput("role_agents", "Main role / preferred agents", true, 1, 2, 200, "Example: Controller — Omen, Viper"),
+        textInput("availability", "Typical availability + timezone", true, 2, 4, 400, "Example: Mon–Thu 7–10pm MST"),
+        textInput("tracker_link", "Riot Tracker link", true, 1, 8, 500, "https://tracker.gg/..."),
+      ],
+    },
+  });
+}
+
 function teamApplicationModal() {
   return Response.json({
     type: 9,
@@ -847,9 +929,9 @@ function renderTeamApplication(application) {
     `**Role / agents:** ${escapeDiscord(application.role_agents)}`,
     `**Availability:** ${escapeDiscord(application.availability)}`,
     `**Tracker:** ${application.tracker_link}`,
-    `**What they want:** ${escapeDiscord(application.team_goal)}`,
+    application.team_goal ? `**What they want:** ${escapeDiscord(application.team_goal)}` : null,
     `**Submitted:** ${relativeDiscordTime(application.submitted_at)}`,
-  ].join("\n").slice(0, 1950);
+  ].filter(Boolean).join("\n").slice(0, 1950);
 }
 
 function teamApplicationStatusButtons(application) {

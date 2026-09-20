@@ -108,26 +108,23 @@ async function scanSource(gateway, state) {
     if (!message?.author?.id || message.author.bot) continue;
     const userId = String(message.author.id);
     const key = `${MEMBER_PREFIX}${userId}`;
-    let record = await gateway.ctx.storage.get(key);
+    const record = await gateway.ctx.storage.get(key);
 
-    // Historical channel participants are not automatically Dojo members. The seed
-    // phase creates records for the known membership cohort (including inactive
-    // members). Only fall back to a tenure lookup when a seeded record is missing.
-    if (!record) {
-      const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
-      if (!tenure) continue;
-      record = mergeTenureIntoRecord(null, userId, tenure);
-    }
+    // The seed phase is the membership cohort boundary. Historical channel
+    // participants who are not in that seeded cohort must never become activation
+    // members merely because they posted in one of these Discord destinations.
+    if (!record) continue;
 
-    if (!record.activation_started_at) {
-      if (message.timestamp && (!record.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(record.unknown_anchor_activity_seen_at))) {
-        record.unknown_anchor_activity_seen_at = new Date(message.timestamp).toISOString();
+    let next = record;
+    if (!next.activation_started_at) {
+      if (message.timestamp && (!next.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(next.unknown_anchor_activity_seen_at))) {
+        next = { ...next, unknown_anchor_activity_seen_at: new Date(message.timestamp).toISOString() };
       }
     } else {
-      record = applyActivationMessage(record, { message, destinationKey: source.destination_key, threadOwnerId: source.thread_owner_id });
+      next = applyActivationMessage(next, { message, destinationKey: source.destination_key, threadOwnerId: source.thread_owner_id });
     }
-    record.updated_at = new Date().toISOString();
-    await gateway.ctx.storage.put(key, record);
+    next.updated_at = new Date().toISOString();
+    await gateway.ctx.storage.put(key, next);
   }
   state.processed_messages += page.length;
   if (page.length < 100) {

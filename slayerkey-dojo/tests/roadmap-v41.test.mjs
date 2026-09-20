@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   FUNDAMENTALS_URL,
-  MANUAL_ITEMS,
   ONBOARDING_URL,
   __test as roadmap,
   getRoadmapV41State,
-  setRoadmapV41Manual,
 } from "../src/roadmap-v41.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
@@ -59,6 +57,23 @@ test("roadmap preserves the exact Whop onboarding and Fundamentals links", () =>
   assert.equal(FUNDAMENTALS_URL, "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_EbCc3zaRKmonI/lessons/lesn_rHCBrfAAys9m8/");
 });
 
+test("roadmap only tracks seven automatically verifiable activation steps", () => {
+  const model = roadmap.buildRoadmapModel({
+    activation: {},
+    config: { channels: {} },
+  });
+  assert.equal(model.total, 7);
+  assert.deepEqual(model.tasks.map((item) => item.label), [
+    "Introduce yourself",
+    "Reply to two other members",
+    "Post your first training task",
+    "Link your Riot account",
+    "Join a conversation",
+    "Post your goal",
+    "Post your first win",
+  ]);
+});
+
 test("automatic activation milestones check themselves off", () => {
   const model = roadmap.buildRoadmapModel({
     activation: {
@@ -71,102 +86,55 @@ test("automatic activation milestones check themselves off", () => {
       first_win_posted: true,
       first_win_within_7_days: true,
     },
-    manual: { completed: [] },
     config: { channels: {} },
   });
 
-  const autoLabels = new Set([
-    "Introduce yourself",
-    "Respond to two other members",
-    "Submit your Day 1 task",
-    "Link your Riot account",
-    "Welcome someone or join a conversation",
-    "Post your goals for this year",
-    "Post your Week 1 Win",
-  ]);
-
-  for (const item of model.tasks.filter((task) => autoLabels.has(task.label))) {
-    assert.equal(item.done, true, item.label);
-  }
+  assert.equal(model.completed, 7);
+  assert.equal(model.tasks.every((item) => item.done), true);
   assert.equal(model.win_complete, true);
   assert.equal(model.win_within_7_days, true);
 });
 
-test("manual checklist items become completed without changing automatic milestones", () => {
-  const selected = MANUAL_ITEMS.map((item) => item.value);
+test("first incomplete automatic task is the only next step", () => {
   const model = roadmap.buildRoadmapModel({
-    activation: {},
-    manual: { completed: selected },
-    config: { channels: {} },
+    activation: {
+      introduction_posted: true,
+      replied_to_two_members: true,
+      first_training_post: false,
+    },
+    config: { channels: { tasks: "123" } },
   });
-
-  const manualLabels = new Set([
-    "Watch the onboarding video",
-    "Complete Day 1 of the 7-Day Fundamentals Sprint",
-    "Adopt the STD server tag",
-    "Mark Interested on an upcoming event",
-    "Complete Days 2–7 of the 7-Day Fundamentals Sprint",
-    "Submit your Day 2–7 tasks",
-  ]);
-  for (const item of model.tasks.filter((task) => manualLabels.has(task.label))) {
-    assert.equal(item.done, true, item.label);
-  }
-  assert.equal(model.tasks.find((task) => task.label === "Introduce yourself").done, false);
+  assert.equal(model.next.label, "Post your first training task");
+  assert.equal(model.next.channel_id, "123");
 });
 
-test("first incomplete task is the roadmap next step", () => {
-  const model = roadmap.buildRoadmapModel({
-    activation: {},
-    manual: { completed: [] },
-    config: { channels: {} },
-  });
-  assert.equal(model.next.label, "Watch the onboarding video");
-});
-
-test("first win remains visibly emphasized in formatted progress", () => {
+test("first win remains visibly emphasized without hour/day/week sections", () => {
   const model = roadmap.buildRoadmapModel({
     activation: { first_win_posted: false },
-    manual: { completed: [] },
     config: { channels: {} },
   });
   const text = roadmap.formatRoadmapView(model);
-  assert.match(text, /FIRST WIN: ⬜ NOT YET/);
-  assert.match(text, /Post your Week 1 Win/);
+  assert.match(text, /First Win: ⬜ NOT YET/);
+  assert.equal(/YOUR FIRST HOUR/.test(text), false);
+  assert.equal(/YOUR FIRST DAY/.test(text), false);
+  assert.equal(/YOUR FIRST WEEK/.test(text), false);
+  assert.match(text, /NEXT STEP/);
 });
 
-test("persistent card has one obvious View My Progress action", () => {
+test("persistent card has one primary progress button and keeps resource links", () => {
   const card = roadmap.buildRoadmapCard({
     guild_id: "guild",
     channels: { start_here: "123" },
   });
-  assert.match(card.content, /personal progress shortcut/);
+  assert.match(card.content, /simple version/);
   assert.equal(card.components[0].components[0].custom_id, "roadmap:v41:view");
   assert.equal(card.components[0].components[0].label, "View My Progress");
-  assert.equal(card.components[0].components[1].style, 5);
+  assert.equal(card.components[0].components[1].url, ONBOARDING_URL);
+  assert.equal(card.components[0].components[2].url, FUNDAMENTALS_URL);
+  assert.equal(card.components[1].components[0].style, 5);
 });
 
-test("manual selections are stored as a full idempotent checklist", async () => {
-  const store = storage([
-    ["tenure:100", { discord_user_id: "100", first_eligible_at: anchor, active: true }],
-  ]);
-  const gateway = {
-    ctx: { storage: store.api },
-    async getTenureRecord(id) { return store.values.get("tenure:" + id) || null; },
-  };
-
-  const first = await setRoadmapV41Manual(gateway, "100", ["day1_sprint", "server_tag"], "interaction-1");
-  assert.equal(first.ok, true);
-  assert.deepEqual(first.state.completed, ["day1_sprint", "server_tag"]);
-
-  const retry = await setRoadmapV41Manual(gateway, "100", ["day1_sprint"], "interaction-1");
-  assert.equal(retry.duplicate, true);
-  assert.deepEqual(retry.state.completed, ["day1_sprint", "server_tag"]);
-
-  const replace = await setRoadmapV41Manual(gateway, "100", ["onboarding_watched"], "interaction-2");
-  assert.deepEqual(replace.state.completed, ["onboarding_watched"]);
-});
-
-test("targeted member state reads activation, manual checklist, team application, and config", async () => {
+test("targeted member state reads existing activation and team application without scanning history", async () => {
   const store = storage([
     ["tenure:100", { discord_user_id: "100", first_eligible_at: anchor, active: true }],
     ["activation:v3:member:100", {
@@ -174,7 +142,6 @@ test("targeted member state reads activation, manual checklist, team application
       activation_started_at: anchor,
       first_win_at: "2026-09-05T00:00:00.000Z",
     }],
-    ["roadmap:v41:manual:100", { completed: ["server_tag"] }],
     ["teamapp:v40:application:100", { status: "pending", submitted_at: "2026-09-04T00:00:00.000Z" }],
     ["roadmap:v41:config", { channels: { start_here: "123" } }],
   ]);
@@ -186,7 +153,6 @@ test("targeted member state reads activation, manual checklist, team application
   const state = await getRoadmapV41State(gateway, "100");
   assert.equal(state.ok, true);
   assert.equal(state.activation.first_win_posted, true);
-  assert.deepEqual(state.manual.completed, ["server_tag"]);
   assert.equal(state.team_application.status, "pending");
   assert.equal(state.config.channels.start_here, "123");
 });
@@ -204,11 +170,9 @@ test("roadmap state refuses users outside the known Dojo cohort", async () => {
 test("roadmap view stays below Discord message limit", () => {
   const model = roadmap.buildRoadmapModel({
     activation: {},
-    manual: { completed: [] },
     config: {
       channels: {
-        introductions: "1", tasks: "2", bots: "3", general: "4", goals: "5",
-        wins: "6", premier_info: "7", clips: "8", community_help: "9",
+        introductions: "1", tasks: "2", bots: "3", general: "4", goals: "5", wins: "6",
       },
     },
   });

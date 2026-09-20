@@ -53,6 +53,7 @@ export async function recordLiveActivationMessage(gateway, message) {
     message,
     destinationKey: context.destination_key,
     threadOwnerId: context.owner_id || null,
+    isThread: Boolean(context.parent_id),
   });
   await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, next);
   return { recorded: true, destination: context.destination_key };
@@ -103,19 +104,19 @@ export async function buildActivationAudit(gateway) {
   return buildAuditModel(records);
 }
 
-export function applyActivationMessage(record, { message, destinationKey, threadOwnerId = null }) {
+export function applyActivationMessage(record, { message, destinationKey, threadOwnerId = null, isThread = false }) {
   const next = { ...(record || {}) };
   const userId = String(message?.author?.id || next.discord_user_id || "");
   const timestamp = validIso(message?.timestamp) ? new Date(message.timestamp).toISOString() : null;
   const anchor = validIso(next.activation_started_at) ? new Date(next.activation_started_at).toISOString() : null;
   if (!userId || !timestamp || !anchor || Date.parse(timestamp) < Date.parse(anchor)) return next;
 
-  const isThread = Boolean(threadOwnerId);
-  const isThreadOwner = !isThread || String(threadOwnerId) === userId;
+  const inThread = Boolean(isThread || threadOwnerId);
+  const isThreadOwner = !inThread || (Boolean(threadOwnerId) && String(threadOwnerId) === userId);
   const referencedAuthor = String(message?.referenced_message?.author?.id || "");
 
   if (destinationKey === "introductions") {
-    if (isThread) {
+    if (inThread) {
       if (isThreadOwner) next.introduction_at = earliestIso(next.introduction_at, timestamp);
       else addIntroInteraction(next, String(threadOwnerId), timestamp, userId);
     } else if (message?.message_reference?.message_id) {

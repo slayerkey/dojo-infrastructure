@@ -259,18 +259,27 @@ export function isPrivateTextChannel(channel, guildId, parent = null) {
   if (Number(channel?.type) !== 0) return false;
   const everyoneId = String(guildId || "");
   if (!everyoneId) return false;
-  return hasViewDenied(channel?.permission_overwrites, everyoneId) ||
-    hasViewDenied(parent?.permission_overwrites, everyoneId);
+
+  // A channel-level @everyone overwrite takes precedence over the parent category.
+  // This avoids accepting a channel that explicitly re-allows View Channel inside
+  // an otherwise private category.
+  const direct = everyoneViewState(channel?.permission_overwrites, everyoneId);
+  if (direct) return direct === "deny";
+  return everyoneViewState(parent?.permission_overwrites, everyoneId) === "deny";
 }
 
-function hasViewDenied(overwrites, everyoneId) {
+function everyoneViewState(overwrites, everyoneId) {
   const row = (Array.isArray(overwrites) ? overwrites : [])
     .find((item) => String(item?.id || "") === everyoneId && Number(item?.type) === 0);
-  if (!row) return false;
+  if (!row) return null;
   try {
-    return (BigInt(String(row.deny || "0")) & 1024n) === 1024n;
+    const deny = BigInt(String(row.deny || "0"));
+    const allow = BigInt(String(row.allow || "0"));
+    if ((deny & 1024n) === 1024n) return "deny";
+    if ((allow & 1024n) === 1024n) return "allow";
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 

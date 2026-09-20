@@ -103,10 +103,7 @@ export class DiscordGateway extends DiscordGatewayV38 {
         String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "") &&
         !payload?.d?.author?.bot
       ) {
-        const roles = Array.isArray(payload?.d?.member?.roles) ? payload.d.member.roles.map(String) : [];
-        if (roles.includes(String(this.env.DISCORD_DOJO_ROLE_ID || ""))) {
-          await recordLiveActivationMessage(this, payload.d);
-        }
+        await recordLiveActivationMessage(this, payload.d);
       }
     } catch (error) {
       console.error("v39 activation gateway tracking failed without blocking legacy handling:", error);

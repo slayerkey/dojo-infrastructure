@@ -813,12 +813,11 @@ function formatV40Audit(model) {
     `**0 messages:** ${model.engagement.zero}`,
     "",
     "### NEEDS ACTION",
-    `**Day 3 — no win:** ${model.needs_action.day3}`,
-    `**Day 7 — no win:** ${model.needs_action.day7}`,
-    `**Stuck:** ${model.needs_action.stuck}`,
-    `**Dormant:** ${model.needs_action.dormant}`,
+    `**7+ days without a first win:** ${model.needs_action.day7}`,
+    `**0 messages in the last 7 days:** ${model.needs_action.dormant}`,
+    `**Early no-win (days 3–6):** ${model.needs_action.day3}`,
     "",
-    "_7-day activation denominator includes current members whose full 7-day window has completed. Use /activation-queue for names._",
+    "_No-win and zero-message groups can overlap. Use /activation-queue for clickable member profiles._",
   ].filter(Boolean).join("\n").slice(0, 1950);
 }
 

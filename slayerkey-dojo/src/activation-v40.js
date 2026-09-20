@@ -585,30 +585,28 @@ async function runV40Audit(interaction, env, stub) {
 async function runV40Queue(interaction, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
   const model = runtime.model;
+  const both = model.queue.attention.filter((member) => member.needs_first_win && member.dormant).length;
   const summary = [
     "## Dojo Activation Queue",
-    `**Day 3 — no first win:** ${model.needs_action.day3}`,
-    `**Day 7 — no first win:** ${model.needs_action.day7}`,
-    `**Stuck:** ${model.needs_action.stuck}`,
-    `**Dormant:** ${model.needs_action.dormant}`,
+    `**No first win — 7+ days:** ${model.needs_action.day7}`,
+    `**Early no-win — days 3–6:** ${model.needs_action.day3}`,
+    `**0 messages in the last 7 days:** ${model.needs_action.dormant}`,
+    `**Both no-win + 0 messages:** ${both}`,
     "",
-    "Only current Dojo-role members appear here. Snoozed members are hidden until their snooze ends.",
+    "**Dormant = a current Dojo member with 0 tracked Discord messages in the previous 7 completed Arizona days.**",
+    "The same person can appear as both no-win and dormant. Click the member mention to open their Discord profile.",
   ].join("\n");
   await editOriginalInteraction(interaction, env, { content: summary });
 
-  const buckets = [
-    ["DAY 7 — NO FIRST WIN", model.queue.day7],
-    ["STUCK", model.queue.stuck],
-    ["DAY 3 — NO FIRST WIN", model.queue.day3],
-    ["DORMANT", model.queue.dormant],
-  ];
-  for (const [title, members] of buckets) {
-    if (!members.length) continue;
-    const lines = [`## ${title}`];
-    for (const member of members) lines.push(formatQueueMember(member));
-    for (const chunk of chunkLines(lines, 1850)) {
-      await sendEphemeralFollowup(interaction, env, chunk);
-    }
+  if (!model.queue.attention.length) {
+    await sendEphemeralFollowup(interaction, env, "✅ No current members need activation attention right now.");
+    return;
+  }
+
+  const lines = ["## MEMBERS TO CHECK"];
+  for (const member of model.queue.attention) lines.push(formatQueueMember(member));
+  for (const chunk of chunkLines(lines, 1850)) {
+    await sendEphemeralFollowup(interaction, env, chunk);
   }
 }
 
@@ -760,14 +758,15 @@ function formatV40Audit(model) {
 }
 
 function formatQueueMember(member) {
-  const training = member.first_training_post ? "✅" : "❌";
-  const goal = member.goal_posted ? "✅" : "❌";
   const win = member.first_win_posted ? "✅" : "❌";
   const days = Number.isFinite(member.days_since_activation) ? `Day ${member.days_since_activation}` : "Start unknown";
-  const last = member.last_intervention
-    ? ` · Last: ${member.last_intervention}${member.last_intervention_at ? ` ${relativeDiscordTime(member.last_intervention_at)}` : ""}`
-    : "";
-  return `**${escapeDiscord(member.display_name)}** — ${days} · Training ${training} · Goal ${goal} · Win ${win} · 7d msgs ${member.messages_last_7_days}${last}`;
+  const flags = [
+    member.no_win_stage === "day7" ? "7+ DAY NO WIN" : member.no_win_stage === "day3" ? "3–6 DAY NO WIN" : null,
+    member.dormant ? "0 MSGS / 7D" : null,
+    member.stuck ? "STUCK" : null,
+  ].filter(Boolean).join(" · ");
+  const mention = member.discord_user_id ? `<@${member.discord_user_id}>` : escapeDiscord(member.display_name);
+  return `${mention} — ${days} · Win ${win} · 7d msgs **${member.messages_last_7_days}**${flags ? ` · **${flags}**` : ""}`;
 }
 
 function buildProposedDm(name) {

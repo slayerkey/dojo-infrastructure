@@ -166,7 +166,8 @@ export async function handleV40Interaction(request, env, ctx) {
       peak_rank: String(getOption(interaction, "peak_rank") || ""),
       created_at: new Date().toISOString(),
     };
-    await stub.saveTeamApplicationDraft(userId, draft);
+    const saved = await stub.saveTeamApplicationDraft(userId, draft).catch(() => null);
+    if (!saved?.ok) return ephemeralMessage("I could not start the team application right now. Try again in a moment.");
     return teamApplicationModal();
   }
 

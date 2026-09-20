@@ -49,7 +49,7 @@ export default {
     if (url.pathname === "/health") {
       const response = await legacy.fetch(request, env, ctx);
       try {
-        const body = await response.json();
+        const body = await response.clone().json();
         body.discord = body.discord || {};
         body.discord.activation = {
           version: "v39",

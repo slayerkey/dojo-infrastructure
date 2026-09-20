@@ -296,31 +296,51 @@ export function resolveRoadmapChannels(channels, guildId) {
 export function buildRoadmapCard(config = {}) {
   const startHere = channelMention(config?.channels?.start_here);
   const content = [
-    "## 🧭 Your 90 Day Improvement Roadmap",
+    "## 🧭 Your Dojo Roadmap",
     startHere
-      ? `Your full roadmap and instructions stay in ${startHere}. This channel is your **personal progress shortcut**.`
-      : "Your full roadmap stays in Start Here. This channel is your **personal progress shortcut**.",
-    "",
-    "The Dojo Bot automatically checks off the actions it can verify. For a few offline/manual steps, you can mark them complete yourself.",
+      ? `The full 90-day roadmap still lives in ${startHere}. This is the **simple version that tracks what you've actually done**.`
+      : "This is the simple version of your Dojo roadmap that tracks what you've actually done.",
     "",
     "### 🏆 Main goal",
-    "**Post your first win during your first week.**",
+    "**Post your first win.**",
     "",
-    "Click below anytime to see exactly what's done, what's next, and jump straight to the right channel.",
+    "Click **View My Progress** and the bot will show only your next step. Most steps check themselves off automatically from your real Discord activity.",
   ].join("\n");
 
   const components = [{
     type: 1,
-    components: [{
-      type: 2, style: 1, custom_id: "roadmap:v41:view", label: "View My Progress", emoji: { name: "🧭" },
-    }],
+    components: [
+      {
+        type: 2,
+        style: 1,
+        custom_id: "roadmap:v41:view",
+        label: "View My Progress",
+        emoji: { name: "🧭" },
+      },
+      {
+        type: 2,
+        style: 5,
+        url: ONBOARDING_URL,
+        label: "Onboarding Video",
+      },
+      {
+        type: 2,
+        style: 5,
+        url: FUNDAMENTALS_URL,
+        label: "7-Day Fundamentals",
+      },
+    ],
   }];
 
   if (config?.channels?.start_here && config?.guild_id) {
-    components[0].components.push({
-      type: 2, style: 5,
-      url: discordChannelUrl(config.guild_id, config.channels.start_here),
-      label: "Full Roadmap",
+    components.push({
+      type: 1,
+      components: [{
+        type: 2,
+        style: 5,
+        url: discordChannelUrl(config.guild_id, config.channels.start_here),
+        label: "Full 90-Day Roadmap",
+      }],
     });
   }
 
@@ -329,31 +349,27 @@ export function buildRoadmapCard(config = {}) {
 
 export function buildRoadmapModel(state) {
   const activation = state?.activation || {};
-  const manual = new Set(state?.manual?.completed || []);
   const channels = state?.config?.channels || {};
 
+  // Keep the interactive checklist deliberately small. These are all events the
+  // Dojo already proves automatically, so members never need to babysit checkboxes.
   const tasks = [
-    task("first-hour", "Watch the onboarding video", manual.has("onboarding_watched"), markdownLink("Onboarding video", ONBOARDING_URL), "onboarding_watched"),
-    task("first-hour", "Introduce yourself", Boolean(activation.introduction_posted), channelMention(channels.introductions)),
-    task("first-hour", "Respond to two other members", Boolean(activation.replied_to_two_members), channelMention(channels.introductions)),
-    task("first-hour", "Complete Day 1 of the 7-Day Fundamentals Sprint", manual.has("day1_sprint"), markdownLink("Day 1 Fundamentals", FUNDAMENTALS_URL), "day1_sprint"),
-    task("first-hour", "Submit your Day 1 task", Boolean(activation.first_training_post), channelMention(channels.tasks)),
-
-    task("first-day", "Adopt the STD server tag", manual.has("server_tag"), "Server name → Server Tag → Adopt Tag", "server_tag"),
-    task("first-day", "Mark Interested on an upcoming event", manual.has("event_interest"), "Events tab below the server banner", "event_interest"),
-    task("first-day", "Link your Riot account", Boolean(activation.riot_linked), joinPieces(["Run `/linkriot` in", channelMention(channels.bots)])),
-    task("first-day", "Welcome someone or join a conversation", Boolean(activation.first_general_message), channelMention(channels.general)),
-    task("first-day", "Post your goals for this year", Boolean(activation.goal_posted), channelMention(channels.goals)),
-
-    task("first-week", "Complete Days 2–7 of the 7-Day Fundamentals Sprint", manual.has("days2_7_sprint"), markdownLink("Days 2–7 Fundamentals", FUNDAMENTALS_URL), "days2_7_sprint"),
-    task("first-week", "Submit your Day 2–7 tasks", manual.has("days2_7_tasks"), channelMention(channels.tasks), "days2_7_tasks"),
-    task("first-week", "Post your Week 1 Win", Boolean(activation.first_win_posted), channelMention(channels.wins), null, true),
+    task("Introduce yourself", Boolean(activation.introduction_posted), channelMention(channels.introductions), "introductions"),
+    task("Reply to two other members", Boolean(activation.replied_to_two_members), channelMention(channels.introductions), "introductions"),
+    task("Post your first training task", Boolean(activation.first_training_post), channelMention(channels.tasks), "tasks"),
+    task("Link your Riot account", Boolean(activation.riot_linked), channelMention(channels.bots), "bots"),
+    task("Join a conversation", Boolean(activation.first_general_message), channelMention(channels.general), "general"),
+    task("Post your goal", Boolean(activation.goal_posted), channelMention(channels.goals), "goals"),
+    task("Post your first win", Boolean(activation.first_win_posted), channelMention(channels.wins), "wins", true),
   ];
 
   const completed = tasks.filter((item) => item.done).length;
   const next = tasks.find((item) => !item.done) || null;
   return {
-    tasks, completed, total: tasks.length, next,
+    tasks,
+    completed,
+    total: tasks.length,
+    next,
     win_complete: Boolean(activation.first_win_posted),
     win_within_7_days: Boolean(activation.first_win_within_7_days),
     team_application: state?.team_application || null,
@@ -366,43 +382,49 @@ async function buildRoadmapView(userId, env, stub) {
   if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
   const model = buildRoadmapModel(state);
   const content = formatRoadmapView(model);
-  const manualCompleted = new Set(state.manual?.completed || []);
 
   const components = [];
-  const actionButtons = [{
-    type: 2, style: 2, custom_id: "roadmap:v41:refresh", label: "Refresh Progress", emoji: { name: "🔄" },
-  }];
-  if (!model.win_complete) {
-    actionButtons.unshift({
-      type: 2, style: 3, custom_id: "actv40:win", label: "Post My First Win", emoji: { name: "🏆" },
+  const primary = [];
+
+  if (!model.win_complete && model.next?.key === "wins") {
+    primary.push({
+      type: 2,
+      style: 3,
+      custom_id: "actv40:win",
+      label: "Post My First Win",
+      emoji: { name: "🏆" },
+    });
+  } else if (model.next?.channel_id) {
+    primary.push({
+      type: 2,
+      style: 5,
+      url: discordChannelUrl(env.DISCORD_GUILD_ID, model.next.channel_id),
+      label: "Open Next Step",
     });
   }
-  components.push({ type: 1, components: actionButtons });
 
-  components.push({
-    type: 1,
-    components: [{
-      type: 3,
-      custom_id: "roadmap:v41:manual",
-      placeholder: "Mark manual steps complete",
-      min_values: 0,
-      max_values: MANUAL_ITEMS.length,
-      options: MANUAL_ITEMS.map((item) => ({
-        label: item.label, value: item.value, default: manualCompleted.has(item.value),
-      })),
-    }],
+  primary.push({
+    type: 2,
+    style: 2,
+    custom_id: "roadmap:v41:refresh",
+    label: "Refresh",
+    emoji: { name: "🔄" },
   });
+  components.push({ type: 1, components: primary });
 
+  const resources = [
+    { type: 2, style: 5, url: ONBOARDING_URL, label: "Onboarding" },
+    { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Fundamentals" },
+  ];
   if (model.channels?.start_here) {
-    components.push({
-      type: 1,
-      components: [{
-        type: 2, style: 5,
-        url: discordChannelUrl(env.DISCORD_GUILD_ID, model.channels.start_here),
-        label: "Open Full Roadmap",
-      }],
+    resources.push({
+      type: 2,
+      style: 5,
+      url: discordChannelUrl(env.DISCORD_GUILD_ID, model.channels.start_here),
+      label: "Full Roadmap",
     });
   }
+  components.push({ type: 1, components: resources });
 
   return { content, components };
 }
@@ -411,46 +433,42 @@ export function formatRoadmapView(model) {
   const lines = [
     `## 🧭 Your Dojo Roadmap — ${model.completed}/${model.total}`,
     model.win_complete
-      ? `### 🏆 FIRST WIN: ✅ COMPLETE${model.win_within_7_days ? " — within your first 7 days" : ""}`
-      : "### 🏆 FIRST WIN: ⬜ NOT YET",
-    "",
-    "### ⌚ YOUR FIRST HOUR",
-    ...formatStage(model.tasks, "first-hour"),
-    "",
-    "### 🕒 YOUR FIRST DAY",
-    ...formatStage(model.tasks, "first-day"),
-    "",
-    "### 📅 YOUR FIRST WEEK",
-    ...formatStage(model.tasks, "first-week"),
+      ? `### 🏆 First Win: ✅ COMPLETE${model.win_within_7_days ? " — within 7 days" : ""}`
+      : "### 🏆 First Win: ⬜ NOT YET",
     "",
   ];
 
   if (model.next) {
-    lines.push(`**NEXT STEP:** ${model.next.label}${model.next.link ? ` — ${model.next.link}` : ""}`, "");
+    lines.push(
+      "### NEXT STEP",
+      `**${model.next.label}**${model.next.link ? ` → ${model.next.link}` : ""}`,
+      "",
+      "_Finish that step and come back here. The bot checks it off automatically._",
+    );
   } else {
-    lines.push("✅ **Starter roadmap complete.** Keep following the full 90-day roadmap in Start Here.", "");
+    lines.push(
+      "✅ **Starter activation complete.**",
+      "Keep following the full 90-day roadmap and keep stacking wins.",
+    );
   }
 
-  const premier = model.team_application
-    ? `✅ Premier application: **${String(model.team_application.status || "pending").toUpperCase()}**`
-    : joinPieces(["⬜ Premier teams:", channelMention(model.channels?.premier_info), "— run `/teamapply` when you're ready."]);
-  lines.push("### OPTIONAL / EXPLORE", premier);
+  if (model.team_application) {
+    lines.push("", `Premier application: **${String(model.team_application.status || "pending").toUpperCase()}**`);
+  }
 
-  if (model.channels?.clips) lines.push(`• Share a recent clip in ${channelMention(model.channels.clips)}`);
-  if (model.channels?.community_help) lines.push(`• Ask a question or share an experience in ${channelMention(model.channels.community_help)}`);
-
-  lines.push("", "_Automatic items update from your real Discord activity. Use the select menu below only for steps the bot cannot verify._");
   return lines.join("\n").slice(0, 1950);
 }
 
-function formatStage(tasks, stage) {
-  return tasks
-    .filter((item) => item.stage === stage)
-    .map((item) => `${item.done ? "✅" : "⬜"} ${item.label}${item.link ? ` — ${item.link}` : ""}`);
-}
-
-function task(stage, label, done, link = null, manualKey = null, mainGoal = false) {
-  return { stage, label, done: Boolean(done), link: link || null, manual_key: manualKey, main_goal: Boolean(mainGoal) };
+function task(label, done, link = null, key = null, mainGoal = false) {
+  const match = /^<#(\d+)>$/.exec(String(link || ""));
+  return {
+    label,
+    done: Boolean(done),
+    link: link || null,
+    key,
+    channel_id: match ? match[1] : null,
+    main_goal: Boolean(mainGoal),
+  };
 }
 
 function joinPieces(parts) { return parts.filter(Boolean).join(" "); }

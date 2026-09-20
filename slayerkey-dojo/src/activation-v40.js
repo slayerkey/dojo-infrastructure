@@ -9,7 +9,6 @@ import {
   buildActivationV40Model,
   formatPercent,
   identityFromGuildMember,
-  identityFromMessage,
   isPrivateTextChannel,
   mergeIdentityIntoRecord,
   previousSevenPhoenixDateKeys,

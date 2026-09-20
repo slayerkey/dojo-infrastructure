@@ -6,6 +6,11 @@ import {
   SEVEN_DAYS_MS,
 } from "../src/activation-core.js";
 import { beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
+import {
+  claimActivationCommandRegistration,
+  completeActivationCommandRegistration,
+  failActivationCommandRegistration,
+} from "../src/activation-audit.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
 
@@ -188,4 +193,34 @@ test("backfill start/resume is idempotent and does not clear member records", as
   const rerun = await beginActivationBackfill(gateway);
   assert.equal(rerun.phase, "seed");
   assert.equal(values.get("activation:v3:member:100").first_win_at, "2026-09-02T00:00:00.000Z");
+});
+
+
+test("activation command registration dedupes, rechecks periodically, and retries errors", async () => {
+  const state = new Map();
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const gateway = {
+    ctx: {
+      storage: {
+        async get(key) { return state.get(key); },
+        async put(key, value) { state.set(key, clone(value)); },
+      },
+    },
+  };
+
+  assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), true);
+  assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), false);
+
+  await completeActivationCommandRegistration(gateway, "activation-v3");
+  assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), false);
+
+  state.set("activation:v3:command-registration", {
+    version: "activation-v3",
+    status: "complete",
+    updated_at: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
+  });
+  assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), true);
+
+  await failActivationCommandRegistration(gateway, "activation-v3", "test");
+  assert.equal(await claimActivationCommandRegistration(gateway, "activation-v3"), true);
 });

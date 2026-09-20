@@ -121,7 +121,12 @@ async function scanSource(gateway, state) {
         next = { ...next, unknown_anchor_activity_seen_at: new Date(message.timestamp).toISOString() };
       }
     } else {
-      next = applyActivationMessage(next, { message, destinationKey: source.destination_key, threadOwnerId: source.thread_owner_id });
+      next = applyActivationMessage(next, {
+        message,
+        destinationKey: source.destination_key,
+        threadOwnerId: source.thread_owner_id,
+        isThread: Boolean(source.parent_id),
+      });
     }
     next.updated_at = new Date().toISOString();
     await gateway.ctx.storage.put(key, next);

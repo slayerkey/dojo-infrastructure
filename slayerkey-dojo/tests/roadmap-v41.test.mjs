@@ -126,7 +126,9 @@ test("persistent card has one primary progress button and keeps resource links",
     guild_id: "guild",
     channels: { start_here: "123" },
   });
-  assert.match(card.content, /simple version/);
+  assert.equal(card.content, "");
+  assert.equal(card.embeds[0].title, "🧭 Your Dojo Roadmap");
+  assert.match(card.embeds[0].description, /next step/i);
   assert.equal(card.components[0].components[0].custom_id, "roadmap:v41:view");
   assert.equal(card.components[0].components[0].label, "View My Progress");
   assert.equal(card.components[0].components[1].url, ONBOARDING_URL);
@@ -154,6 +156,23 @@ test("targeted member state reads existing activation and team application witho
   assert.equal(state.ok, true);
   assert.equal(state.activation.first_win_posted, true);
   assert.equal(state.team_application.status, "pending");
+  assert.equal(state.config.channels.start_here, "123");
+});
+
+
+
+test("owner preview mode works even when the owner is outside the tracked cohort", async () => {
+  const store = storage([
+    ["roadmap:v41:config", { channels: { start_here: "123" } }],
+  ]);
+  const gateway = {
+    ctx: { storage: store.api },
+    async getTenureRecord() { return null; },
+  };
+  const state = await getRoadmapV41State(gateway, "owner", true);
+  assert.equal(state.ok, true);
+  assert.equal(state.preview, true);
+  assert.equal(state.activation.first_win_posted, false);
   assert.equal(state.config.channels.start_here, "123");
 });
 

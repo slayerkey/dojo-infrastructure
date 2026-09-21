@@ -329,7 +329,7 @@ export async function handleV40Interaction(request, env, ctx) {
     ctx.waitUntil(
       publishTeamApplication(application.application, env, stub)
         .then(() => editOriginalInteraction(interaction, env, {
-          content: "Your Premier team application was submitted privately to the team application inbox.",
+          content: "Your Premier team application was submitted.",
         }))
         .catch((error) => failInteraction(interaction, env, "Application saved, but staff delivery failed", error)),
     );
@@ -361,11 +361,42 @@ export async function handleV40Interaction(request, env, ctx) {
     ctx.waitUntil(
       publishTeamApplication(application.application, env, stub)
         .then(() => editOriginalInteraction(interaction, env, {
-          content: "Your Premier team application was submitted privately to the team application inbox.",
+          content: "Your Premier team application was submitted.",
         }))
         .catch((error) => failInteraction(interaction, env, "Application saved, but staff delivery failed", error)),
     );
     return deferredEphemeral();
+  }
+
+  if (customId.startsWith("teamapp:v43:organizer-decline:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can decline organizer applications.");
+    const targetId = customId.split(":").pop();
+    if (!targetId) return ephemeralMessage("That organizer application could not be identified.");
+    return organizerDeclineModal(targetId);
+  }
+
+  if (customId.startsWith("teamapp:v43:organizer-decline-submit:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can decline organizer applications.");
+    const targetId = customId.split(":").pop();
+    const reason = modalValue(interaction, "decline_reason");
+    if (!targetId || !reason) return ephemeralMessage("A decline reason is required.");
+    const updated = await stub.updateOrganizerApplicationStatus(targetId, "declined", userId, reason);
+    if (!updated?.ok) return ephemeralMessage(updated?.message || "Organizer application could not be updated.");
+    ctx.waitUntil(refreshStoredOrganizerApplicationMessage(updated.application, env, stub).catch((error) => {
+      console.error("Could not refresh declined organizer application:", error);
+    }));
+    return ephemeralMessage("Organizer application declined and the reason was saved.");
+  }
+
+  if (customId.startsWith("teamapp:v43:organizer-accepted:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can accept organizer applications.");
+    const targetId = customId.split(":").pop();
+    const updated = await stub.updateOrganizerApplicationStatus(targetId, "accepted", userId, null);
+    if (!updated?.ok) return ephemeralMessage(updated?.message || "Organizer application could not be updated.");
+    return Response.json({
+      type: 7,
+      data: buildOrganizerApplicationMessage(updated.application),
+    });
   }
 
   if (customId.startsWith("teamapp:v42:decline:")) {

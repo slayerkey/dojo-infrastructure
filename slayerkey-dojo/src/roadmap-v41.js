@@ -176,20 +176,24 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
 
   if (!activation && !tenure) {
     if (!allowPreview) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+
+    const now = new Date().toISOString();
+    const ownerTestRecord = {
+      discord_user_id: userId,
+      activation_started_at: now,
+      roadmap_test_record: true,
+      membership_active: false,
+      created_at: now,
+      updated_at: now,
+    };
+    await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, ownerTestRecord);
+
     return {
       ok: true,
-      preview: true,
+      preview: false,
+      test_mode: true,
       discord_user_id: userId,
-      activation: {
-        introduction_posted: false,
-        replied_to_two_members: false,
-        first_training_post: false,
-        riot_linked: false,
-        first_general_message: false,
-        goal_posted: false,
-        first_win_posted: false,
-        first_win_within_7_days: false,
-      },
+      activation: deriveMember(ownerTestRecord),
       manual: { completed: [], updated_at: null },
       team_application: null,
       config: config || null,
@@ -200,6 +204,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
   return {
     ok: true,
     preview: false,
+    test_mode: Boolean(merged?.roadmap_test_record),
     discord_user_id: userId,
     activation: deriveMember(merged),
     manual: {
@@ -429,10 +434,10 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false) {
     });
   }
 
-  if (state.preview) {
+  if (state.test_mode) {
     fields.push({
-      name: "Preview Mode",
-      value: "Your owner account is not part of the tracked Dojo cohort, so this shows a clean new-member preview instead of an error.",
+      name: "Owner Test Mode",
+      value: "This behaves like a real roadmap account for testing, but it is excluded from member activation analytics.",
       inline: false,
     });
   }

@@ -442,6 +442,10 @@ export async function getActivationV40Snapshot(gateway) {
   const records = [];
   for (const [key, value] of stored.entries()) {
     const userId = String(key).slice(MEMBER_PREFIX.length);
+    if (value?.roadmap_test_record) {
+      tenureById.delete(userId);
+      continue;
+    }
     records.push(mergeTenureIntoRecord(value, userId, tenureById.get(userId) || null));
     tenureById.delete(userId);
   }

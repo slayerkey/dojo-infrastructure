@@ -668,18 +668,20 @@ async function setupPremierPublicCard(interaction, env, stub) {
 
   const previous = await stub.getPremierPublicCardConfig().catch(() => null);
   const payload = {
-    content: [
-      "## 🤼 Apply for a Premier Team",
-      "Pick your region and fill out the short application. Your answers are sent privately to the Dojo staff inbox.",
-      "",
-      "Use the Premier info post above for the full details.",
-    ].join("\n"),
+    content: "",
+    embeds: [{
+      title: "🤼 Apply for a Premier Team",
+      description: "Choose your region to start a **short Premier application**.",
+      footer: {
+        text: "Applications appear for team organizers in the order they are submitted.",
+      },
+    }],
     components: [
       {
         type: 1,
         components: [
-          { type: 2, style: 1, custom_id: "teamapp:v41:start:NA", label: "Apply — NA" },
-          { type: 2, style: 1, custom_id: "teamapp:v41:start:EU", label: "Apply — EU" },
+          { type: 2, style: 1, custom_id: "teamapp:v41:start:NA", label: "North America", emoji: { name: "🇺🇸" } },
+          { type: 2, style: 1, custom_id: "teamapp:v41:start:EU", label: "Europe", emoji: { name: "🇪🇺" } },
           { type: 2, style: 5, url: PREMIER_INFO_MESSAGE_URL, label: "Premier Info" },
         ],
       },
@@ -712,10 +714,9 @@ async function setupPremierPublicCard(interaction, env, stub) {
   });
 
   await editOriginalInteraction(interaction, env, {
-    content: "Premier application buttons are live in this channel. Members can now click **Apply — NA** or **Apply — EU**.",
+    content: "Premier application buttons are live in this channel: **🇺🇸 North America** and **🇪🇺 Europe**.",
   });
 }
-
 export async function setPremierPublicCardConfig(gateway, config) {
   const next = { ...(config || {}), updated_at: new Date().toISOString() };
   await gateway.ctx.storage.put(TEAM_PUBLIC_CARD_KEY, next);

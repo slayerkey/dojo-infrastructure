@@ -909,6 +909,18 @@ function quickTeamApplicationModal(region) {
   });
 }
 
+function teamApplicationDeclineModal(discordUserId) {
+  return Response.json({
+    type: 9,
+    data: {
+      custom_id: `teamapp:v42:decline-submit:${discordUserId}`,
+      title: "Decline Premier Application",
+      components: [
+        textInput("decline_reason", "Reason", true, 2, 3, 500, "Why are we declining this application?"),
+      ],
+    },
+  });
+}
 function teamApplicationModal() {
   return Response.json({
     type: 9,
@@ -941,21 +953,49 @@ function textInput(customId, label, required, style, minLength, maxLength, place
   };
 }
 
-function renderTeamApplication(application) {
-  return [
-    "## Premier Team Application",
-    `**Member:** ${escapeDiscord(resolveDisplayName(application.discord_user_id, application, application))}`,
-    `**Discord ID:** ${application.discord_user_id}`,
-    `**Status:** ${String(application.status || "pending").toUpperCase()}`,
-    `**Region:** ${escapeDiscord(application.region)}`,
-    `**Current rank:** ${escapeDiscord(application.current_rank)}`,
-    `**Peak rank:** ${escapeDiscord(application.peak_rank)}`,
-    `**Role / agents:** ${escapeDiscord(application.role_agents)}`,
-    `**Availability:** ${escapeDiscord(application.availability)}`,
-    `**Tracker:** ${application.tracker_link}`,
-    application.team_goal ? `**What they want:** ${escapeDiscord(application.team_goal)}` : null,
-    `**Submitted:** ${relativeDiscordTime(application.submitted_at)}`,
-  ].filter(Boolean).join("\n").slice(0, 1950);
+function buildTeamApplicationMessage(application) {
+  return {
+    content: "",
+    embeds: [buildTeamApplicationEmbed(application)],
+    components: teamApplicationStatusButtons(application),
+    allowed_mentions: { parse: [] },
+  };
+}
+
+function buildTeamApplicationEmbed(application) {
+  const region = String(application?.region || "").toUpperCase();
+  const status = String(application?.status || "pending").toLowerCase();
+  const displayName = resolveDisplayName(application.discord_user_id, application, application);
+  const statusText = status === "accepted"
+    ? "✅ ACCEPTED"
+    : status === "declined"
+      ? "❌ DECLINED"
+      : status === "waitlisted"
+        ? "⏳ WAITLISTED"
+        : "🟡 PENDING";
+
+  const fields = [
+    { name: "Status", value: `**${statusText}**`, inline: true },
+    { name: "Submitted", value: relativeDiscordTime(application.submitted_at), inline: true },
+    { name: "Member", value: `<@${application.discord_user_id}>\n${escapeDiscord(displayName)}\n\`${application.discord_user_id}\``, inline: false },
+    { name: "Current Rank", value: escapeDiscord(application.current_rank), inline: true },
+    { name: "Peak Rank", value: escapeDiscord(application.peak_rank), inline: true },
+    { name: "Role / Agents", value: escapeDiscord(application.role_agents), inline: false },
+    { name: "Availability", value: escapeDiscord(application.availability), inline: false },
+    { name: "Tracker", value: `[Open Riot Tracker](${application.tracker_link})`, inline: false },
+  ];
+
+  if (application.team_goal) fields.push({ name: "What They Want", value: escapeDiscord(application.team_goal), inline: false });
+  if (application.decision_reason) fields.push({ name: "Decline Reason", value: escapeDiscord(application.decision_reason), inline: false });
+
+  return {
+    title: `${regionFlag(region)} ${regionName(region)} Premier Application`,
+    description: "Internal organizer view",
+    fields,
+    footer: {
+      text: "Accept only records the decision. Add team/channel access manually.",
+    },
+  };
 }
 
 function teamApplicationStatusButtons(application) {
@@ -964,13 +1004,43 @@ function teamApplicationStatusButtons(application) {
   return [{
     type: 1,
     components: [
-      { type: 2, style: 3, custom_id: `teamapp:v40:status:accepted:${id}`, label: "Accept", disabled: status === "accepted" },
-      { type: 2, style: 2, custom_id: `teamapp:v40:status:waitlisted:${id}`, label: "Waitlist", disabled: status === "waitlisted" },
-      { type: 2, style: 4, custom_id: `teamapp:v40:status:declined:${id}`, label: "Decline", disabled: status === "declined" },
+      {
+        type: 2,
+        style: 3,
+        custom_id: `teamapp:v42:accepted:${id}`,
+        label: "Accept",
+        disabled: status === "accepted",
+      },
+      {
+        type: 2,
+        style: 4,
+        custom_id: `teamapp:v42:decline:${id}`,
+        label: "Decline",
+        disabled: status === "declined",
+      },
     ],
   }];
 }
 
+async function refreshStoredTeamApplicationMessage(application, env, stub) {
+  if (!application?.application_message_id) return false;
+  const config = await stub.getTeamApplicationConfig();
+  if (!config?.channel_id) return false;
+  await discordJson(
+    `${DISCORD_API}/channels/${config.channel_id}/messages/${application.application_message_id}`,
+    env,
+    { method: "PATCH", body: JSON.stringify(buildTeamApplicationMessage(application)) },
+  );
+  return true;
+}
+
+function regionFlag(region) {
+  return String(region || "").toUpperCase() === "EU" ? "🇪🇺" : "🇺🇸";
+}
+
+function regionName(region) {
+  return String(region || "").toUpperCase() === "EU" ? "Europe" : "North America";
+}
 async function fetchCurrentDojoMembers(env) {
   const roleId = String(env.DISCORD_DOJO_ROLE_ID || "");
   if (!roleId) throw new Error("DISCORD_DOJO_ROLE_ID is missing.");
@@ -1204,6 +1274,9 @@ export const __test = Object.freeze({
   commandSignature,
   formatQueueMember,
   formatV40Audit,
-  renderTeamApplication,
+  buildTeamApplicationEmbed,
+  buildTeamApplicationMessage,
+  regionFlag,
+  regionName,
   teamApplicationStatusButtons,
 });

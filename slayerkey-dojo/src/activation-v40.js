@@ -947,7 +947,24 @@ function quickTeamApplicationModal(region) {
         textInput("peak_rank", "Peak rank", true, 1, 2, 40, "Example: Ascendant 1"),
         textInput("role_agents", "Main role / preferred agents", true, 1, 2, 200, "Example: Controller — Omen, Viper"),
         textInput("availability", "Typical availability + timezone", true, 2, 4, 400, "Example: Mon–Thu 7–10pm MST"),
-        textInput("tracker_link", "Riot Tracker link", true, 1, 8, 500, "https://tracker.gg/..."),
+        textInput("tracker_link", "Tracker link or Riot ID#TAG", true, 1, 3, 500, "tracker.gg/... or Name#TAG"),
+      ],
+    },
+  });
+}
+
+function organizerApplicationModal() {
+  return Response.json({
+    type: 9,
+    data: {
+      custom_id: "teamapp:v43:organizer-submit",
+      title: "🧑‍✈️ Team Organizer Application",
+      components: [
+        textInput("region", "Region (NA or EU)", true, 1, 2, 8, "NA or EU"),
+        textInput("riot_or_tracker", "Riot ID or Tracker", true, 1, 3, 500, "Name#TAG or tracker.gg/..."),
+        textInput("availability", "Availability + timezone", true, 2, 4, 400, "When are you usually available?"),
+        textInput("why_organize", "Why do you want to organize?", true, 2, 10, 700, "Keep it short — what makes you a good fit?"),
+        textInput("experience", "Relevant experience (optional)", false, 2, 0, 500, "Teams, scheduling, leadership, Discord, etc."),
       ],
     },
   });

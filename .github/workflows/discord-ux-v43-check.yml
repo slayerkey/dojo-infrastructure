@@ -1,0 +1,28 @@
+name: Discord UX v43 validation
+
+on:
+  push:
+    branches:
+      - feat/discord-ux-v43
+    paths:
+      - "slayerkey-dojo/**"
+      - ".github/workflows/discord-ux-v43-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: slayerkey-dojo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --no-audit --no-fund --ignore-scripts
+      - run: npm run check:v41

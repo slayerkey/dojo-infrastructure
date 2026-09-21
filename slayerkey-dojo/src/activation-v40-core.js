@@ -265,7 +265,8 @@ export function validateTeamApplication(input = {}) {
   const peakRank = clean(input.peak_rank);
   const roleAgents = clean(input.role_agents);
   const availability = clean(input.availability);
-  const trackerLink = clean(input.tracker_link);
+  let trackerLink = clean(input.tracker_link);
+  if (trackerLink && /^(?:www\.)?tracker\.gg\//i.test(trackerLink)) trackerLink = `https://${trackerLink}`;
   const goal = clean(input.team_goal);
 
   if (!["NA", "EU"].includes(region)) throw new Error("Region must be NA or EU.");

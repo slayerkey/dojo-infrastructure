@@ -71,8 +71,8 @@ export class DiscordGateway extends DiscordGatewayV40 {
     return failRoadmapV41CommandRegistration(this, version, error);
   }
 
-  async getRoadmapV41State(discordUserId) {
-    return getRoadmapV41State(this, discordUserId);
+  async getRoadmapV41State(discordUserId, allowPreview = false) {
+    return getRoadmapV41State(this, discordUserId, allowPreview);
   }
 
   async setRoadmapV41Manual(discordUserId, selected, interactionId) {

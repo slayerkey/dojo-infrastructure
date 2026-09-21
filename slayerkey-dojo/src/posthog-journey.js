@@ -110,6 +110,10 @@ export async function syncActivationPosthogMember(gateway, discordUserId, record
 }
 
 export async function syncActivationPosthogBatch(gateway) {
+  if (!String(gateway.env?.POSTHOG_PROJECT_TOKEN || "").trim()) {
+    return { ok: true, checked: 0, emitted: 0, pending: 0, failed: 0, skipped: "posthog_not_configured" };
+  }
+
   const rows = await gateway.ctx.storage.list({ prefix: MEMBER_PREFIX });
   const tenures = await gateway.listTenureRecords?.().catch(() => []);
   const tenureById = new Map(

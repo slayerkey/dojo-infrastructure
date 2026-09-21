@@ -133,7 +133,7 @@ export class DiscordGateway extends DiscordGatewayV39 {
     return attachTeamApplicationMessage(this, discordUserId, messageId);
   }
 
-  async updateTeamApplicationStatus(discordUserId, status, actorId) {
-    return updateTeamApplicationStatus(this, discordUserId, status, actorId);
+  async updateTeamApplicationStatus(discordUserId, status, actorId, reason = null) {
+    return updateTeamApplicationStatus(this, discordUserId, status, actorId, reason);
   }
 }

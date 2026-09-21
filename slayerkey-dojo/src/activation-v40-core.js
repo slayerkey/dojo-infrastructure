@@ -274,8 +274,8 @@ export function validateTeamApplication(input = {}) {
   if (!peakRank || peakRank.length > 40) throw new Error("Peak rank is required and must be 40 characters or fewer.");
   if (!roleAgents || roleAgents.length > 200) throw new Error("Main role / agents is required and must be 200 characters or fewer.");
   if (!availability || availability.length > 400) throw new Error("Availability is required and must be 400 characters or fewer.");
-  if (!trackerLink || trackerLink.length > 500 || !/^https?:\/\//i.test(trackerLink)) {
-    throw new Error("Tracker link must be a valid http(s) URL.");
+  if (!trackerLink || trackerLink.length > 500) {
+    throw new Error("Tracker link or Riot ID is required and must be 500 characters or fewer.");
   }
   if (goal && goal.length > 800) throw new Error("Team goal must be 800 characters or fewer.");
 

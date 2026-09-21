@@ -961,6 +961,26 @@ async function publishTeamApplication(application, env, stub) {
   return message;
 }
 
+async function publishOrganizerApplication(application, env, stub) {
+  const config = await stub.getTeamApplicationConfig();
+  if (!config?.channel_id) throw new Error("No private team application channel is configured. Run /teamapply-setup in the staff channel.");
+
+  const channel = await discordJson(`${DISCORD_API}/channels/${config.channel_id}`, env);
+  const parent = channel?.parent_id
+    ? await discordJson(`${DISCORD_API}/channels/${channel.parent_id}`, env).catch(() => null)
+    : null;
+  if (!isPrivateTextChannel(channel, env.DISCORD_GUILD_ID, parent)) {
+    throw new Error("The configured team application inbox is no longer private. Re-run /teamapply-setup in a private staff channel.");
+  }
+
+  const message = await discordJson(`${DISCORD_API}/channels/${config.channel_id}/messages`, env, {
+    method: "POST",
+    body: JSON.stringify(buildOrganizerApplicationMessage(application)),
+  });
+  if (message?.id) await stub.attachOrganizerApplicationMessage(application.discord_user_id, message.id);
+  return message;
+}
+
 function formatV40Audit(model) {
   return [
     "## Dojo Activation",

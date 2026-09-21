@@ -1,4 +1,10 @@
 import legacy, { DiscordGateway as DiscordGatewayV24 } from "./index-v24.js";
+import {
+  looksAnnual,
+  mergeDiscordMemberLink,
+  mergeWhopMemberLink,
+  tenureRoleKey,
+} from "./membership-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const WHOP_API = "https://api.whop.com/api/v1";
@@ -334,22 +340,6 @@ async function applyManagedRoles(discordUserId, record, roles, env) {
   return { ok: true };
 }
 
-export function tenureRoleKey(firstEligibleAt, now = new Date()) {
-  const months = fullMonthsSince(firstEligibleAt, now);
-  if (months < 1) return null;
-  return `m${Math.min(months, 6)}`;
-}
-
-export function fullMonthsSince(iso, now = new Date()) {
-  const start = new Date(iso);
-  if (!Number.isFinite(start.getTime()) || start > now) return 0;
-  let months = (now.getUTCFullYear() - start.getUTCFullYear()) * 12 + (now.getUTCMonth() - start.getUTCMonth());
-  const lastDayThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-  const anniversaryDay = Math.min(start.getUTCDate(), lastDayThisMonth);
-  if (now.getUTCDate() < anniversaryDay) months -= 1;
-  return Math.max(0, months);
-}
-
 async function fetchCurrentDojoMemberships(env) {
   return fetchPaged("/memberships", env, (params) => {
     params.append("company_id", env.WHOP_COMPANY_ID);
@@ -441,7 +431,7 @@ async function fetchWhopPlan(planId, env) {
   return response.json();
 }
 
-export async function resolveDiscordUserId(whopUserId, env) {
+async function resolveDiscordUserId(whopUserId, env) {
   const key = `whop:${whopUserId}`;
   const cached = await env.MEMBER_LINKS?.get(key, "json").catch(() => null);
   if (cached?.discord_user_id) return String(cached.discord_user_id);
@@ -463,19 +453,11 @@ export async function resolveDiscordUserId(whopUserId, env) {
   await Promise.all([
     env.MEMBER_LINKS.put(
       key,
-      JSON.stringify({
-        ...(cached && typeof cached === "object" ? cached : {}),
-        discord_user_id: discordUserId,
-        updated_at: now,
-      }),
+      JSON.stringify(mergeWhopMemberLink(cached, discordUserId, now)),
     ),
     env.MEMBER_LINKS.put(
       reverseKey,
-      JSON.stringify({
-        ...(reverseCached && typeof reverseCached === "object" ? reverseCached : {}),
-        whop_user_id: whopUserId,
-        updated_at: now,
-      }),
+      JSON.stringify(mergeDiscordMemberLink(reverseCached, whopUserId, now)),
     ),
   ]).catch(() => {});
   return discordUserId;

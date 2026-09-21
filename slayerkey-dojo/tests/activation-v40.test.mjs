@@ -13,9 +13,12 @@ import {
 } from "../src/activation-v40-core.js";
 import {
   __test as v40,
+  completeOrganizerApplication,
   completeTeamApplication,
+  getActivationV40Snapshot,
   recordActivationCheckinWin,
   saveTeamApplicationDraft,
+  updateOrganizerApplicationStatus,
   updateTeamApplicationStatus,
 } from "../src/activation-v40.js";
 
@@ -503,4 +506,100 @@ test("tracker.gg links without https are normalized for the short Premier applic
     tracker_link: "tracker.gg/valorant/profile/riot/example",
   });
   assert.equal(result.tracker_link, "https://tracker.gg/valorant/profile/riot/example");
+});
+
+
+test("Premier application accepts Riot ID#TAG without throwing away the form", () => {
+  const result = validateTeamApplication({
+    region: "NA",
+    current_rank: "Diamond 1",
+    peak_rank: "Ascendant 1",
+    role_agents: "Controller — Omen",
+    availability: "Weeknights MST",
+    tracker_link: "Slayerkey#YOLO",
+  });
+  assert.equal(result.tracker_link, "Slayerkey#YOLO");
+});
+
+test("owner roadmap test record is excluded from activation analytics snapshots", async () => {
+  const { storage } = mockStorage([
+    ["activation:v3:member:owner", {
+      discord_user_id: "owner",
+      activation_started_at: anchor,
+      roadmap_test_record: true,
+    }],
+    ["activation:v3:member:100", {
+      discord_user_id: "100",
+      activation_started_at: anchor,
+    }],
+  ]);
+  const gateway = {
+    ctx: { storage },
+    async listTenureRecords() { return []; },
+  };
+  const snapshot = await getActivationV40Snapshot(gateway);
+  assert.deepEqual(snapshot.records.map((record) => record.discord_user_id), ["100"]);
+});
+
+test("Premier Team Organizer application stores separately from player application", async () => {
+  const { values, storage } = mockStorage();
+  const gateway = { ctx: { storage } };
+  const result = await completeOrganizerApplication(
+    gateway,
+    "100",
+    "organizer-interaction",
+    {
+      region: "EU",
+      riot_or_tracker: "Organizer#1234",
+      availability: "Evenings CET",
+      why_organize: "I like scheduling and keeping groups moving.",
+      experience: "Ran a collegiate team Discord.",
+    },
+    {
+      discord_user_id: "100",
+      display_name: "Organizer",
+      username: "organizer",
+      last_identity_seen_at: new Date().toISOString(),
+    },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.application.application_type, "organizer");
+  assert.equal(result.application.region, "EU");
+  assert.equal(values.has("teamapp:v43:organizer:100"), true);
+  assert.equal(values.has("teamapp:v40:application:100"), false);
+
+  const embed = v40.buildOrganizerApplicationEmbed(result.application);
+  assert.equal(embed.title, "🧑‍✈️ Premier Team Organizer Application");
+  assert.equal(embed.fields[0].name, "Status");
+  assert.equal(embed.fields[1].name, "Region");
+  assert.match(embed.fields[1].value, /Europe/);
+
+  const buttons = v40.organizerApplicationStatusButtons(result.application)[0].components;
+  assert.deepEqual(buttons.map((button) => button.label), ["Accept", "Decline"]);
+});
+
+test("organizer decline reason is stored", async () => {
+  const { storage } = mockStorage([
+    ["teamapp:v43:organizer:100", {
+      application_type: "organizer",
+      discord_user_id: "100",
+      region: "NA",
+      status: "pending",
+      riot_or_tracker: "Test#NA1",
+      availability: "Weeknights",
+      why_organize: "I can organize schedules.",
+      submitted_at: "2026-09-21T10:00:00.000Z",
+    }],
+  ]);
+  const gateway = { ctx: { storage } };
+  const updated = await updateOrganizerApplicationStatus(
+    gateway,
+    "100",
+    "declined",
+    "owner",
+    "Need more availability.",
+  );
+  assert.equal(updated.ok, true);
+  assert.equal(updated.application.status, "declined");
+  assert.equal(updated.application.decision_reason, "Need more availability.");
 });

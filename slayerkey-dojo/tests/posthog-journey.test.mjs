@@ -10,6 +10,11 @@ import {
   syncActivationPosthogMember,
 } from "../src/posthog-journey.js";
 import {
+  looksAnnual,
+  resolveDiscordUserId,
+  tenureRoleKey,
+} from "../src/index-v25.js";
+import {
   ACTIVATION_DESTINATIONS,
   MEMBER_PREFIX,
   recordLiveActivationMessage,
@@ -281,4 +286,40 @@ test("PostHog failure is fail-open: activation behavior remains stored and deliv
   assert.equal(captures.length, 1);
   assert.equal(values.get(`${MEMBER_PREFIX}900001`).first_training_post_at, "2026-09-02T00:00:00.000Z");
   assert.equal(values.get(`${MEMBER_PREFIX}900001`).posthog_delivery?.first_training_post, undefined);
+});
+
+
+test("existing membership tenure role logic still distinguishes monthly tenure and annual plans", () => {
+  assert.equal(tenureRoleKey("2026-08-01T00:00:00.000Z", new Date("2026-09-01T00:00:00.000Z")), "m1");
+  assert.equal(tenureRoleKey("2026-03-01T00:00:00.000Z", new Date("2026-09-01T00:00:00.000Z")), "m6");
+  assert.equal(looksAnnual({ billing_period: 365 }), true);
+  assert.equal(looksAnnual({ title: "Annual Dojo" }), true);
+  assert.equal(looksAnnual({ title: "Monthly Dojo", billing_period: 30 }), false);
+});
+
+test("membership social-account sync preserves an existing Whop to PostHog mapping", async () => {
+  const memberLinks = memoryKv([
+    ["whop:user_preserve", { posthog_distinct_id: "browser_preserve", posthog_identity_source: "website_posthog_distinct_id" }],
+  ]);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async json() {
+      return { data: [{ service: "discord", account_id: "424242" }] };
+    },
+  });
+  try {
+    const discordId = await resolveDiscordUserId("user_preserve", {
+      WHOP_API_KEY: "whop_test",
+      MEMBER_LINKS: memberLinks,
+    });
+    assert.equal(discordId, "424242");
+    const stored = await memberLinks.get("whop:user_preserve", "json");
+    assert.equal(stored.discord_user_id, "424242");
+    assert.equal(stored.posthog_distinct_id, "browser_preserve");
+    const reverse = await memberLinks.get("discord:424242", "json");
+    assert.equal(reverse.whop_user_id, "user_preserve");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

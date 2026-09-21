@@ -334,13 +334,13 @@ async function applyManagedRoles(discordUserId, record, roles, env) {
   return { ok: true };
 }
 
-function tenureRoleKey(firstEligibleAt, now = new Date()) {
+export function tenureRoleKey(firstEligibleAt, now = new Date()) {
   const months = fullMonthsSince(firstEligibleAt, now);
   if (months < 1) return null;
   return `m${Math.min(months, 6)}`;
 }
 
-function fullMonthsSince(iso, now = new Date()) {
+export function fullMonthsSince(iso, now = new Date()) {
   const start = new Date(iso);
   if (!Number.isFinite(start.getTime()) || start > now) return 0;
   let months = (now.getUTCFullYear() - start.getUTCFullYear()) * 12 + (now.getUTCMonth() - start.getUTCMonth());
@@ -425,7 +425,7 @@ async function isAnnualMembership(membership, env, planCache) {
   return looksAnnual(plan);
 }
 
-function looksAnnual(plan) {
+export function looksAnnual(plan) {
   if (!plan || typeof plan !== "object") return false;
   if (Number(plan.billing_period || 0) >= 300) return true;
   if (Number(plan.expiration_days || 0) >= 300) return true;
@@ -441,7 +441,7 @@ async function fetchWhopPlan(planId, env) {
   return response.json();
 }
 
-async function resolveDiscordUserId(whopUserId, env) {
+export async function resolveDiscordUserId(whopUserId, env) {
   const key = `whop:${whopUserId}`;
   const cached = await env.MEMBER_LINKS?.get(key, "json").catch(() => null);
   if (cached?.discord_user_id) return String(cached.discord_user_id);

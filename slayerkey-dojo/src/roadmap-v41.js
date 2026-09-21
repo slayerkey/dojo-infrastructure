@@ -80,7 +80,7 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (command === "roadmap" || customId === "roadmap:v41:view") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
     try {
-      const view = await buildRoadmapView(userId, env, stub);
+      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env));
       return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't load your roadmap: ${safeError(error)}`);
@@ -90,7 +90,7 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (customId === "roadmap:v41:refresh") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
     try {
-      const view = await buildRoadmapView(userId, env, stub);
+      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env));
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't refresh your roadmap: ${safeError(error)}`);
@@ -162,7 +162,7 @@ export async function failRoadmapV41CommandRegistration(gateway, version, error)
   });
 }
 
-export async function getRoadmapV41State(gateway, discordUserId) {
+export async function getRoadmapV41State(gateway, discordUserId, allowPreview = false) {
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
 
@@ -174,11 +174,32 @@ export async function getRoadmapV41State(gateway, discordUserId) {
     gateway.ctx.storage.get(CONFIG_KEY),
   ]);
 
-  if (!activation && !tenure) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+  if (!activation && !tenure) {
+    if (!allowPreview) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+    return {
+      ok: true,
+      preview: true,
+      discord_user_id: userId,
+      activation: {
+        introduction_posted: false,
+        replied_to_two_members: false,
+        first_training_post: false,
+        riot_linked: false,
+        first_general_message: false,
+        goal_posted: false,
+        first_win_posted: false,
+        first_win_within_7_days: false,
+      },
+      manual: { completed: [], updated_at: null },
+      team_application: null,
+      config: config || null,
+    };
+  }
 
   const merged = mergeTenureIntoRecord(activation, userId, tenure);
   return {
     ok: true,
+    preview: false,
     discord_user_id: userId,
     activation: deriveMember(merged),
     manual: {
@@ -294,18 +315,17 @@ export function resolveRoadmapChannels(channels, guildId) {
 }
 
 export function buildRoadmapCard(config = {}) {
-  const startHere = channelMention(config?.channels?.start_here);
-  const content = [
-    "## 🧭 Your Dojo Roadmap",
-    startHere
-      ? `The full 90-day roadmap still lives in ${startHere}. This is the **simple version that tracks what you've actually done**.`
-      : "This is the simple version of your Dojo roadmap that tracks what you've actually done.",
-    "",
-    "### 🏆 Main goal",
-    "**Post your first win.**",
-    "",
-    "Click **View My Progress** and the bot will show only your next step. Most steps check themselves off automatically from your real Discord activity.",
-  ].join("\n");
+  const embed = {
+    title: "🧭 Your Dojo Roadmap",
+    description: [
+      "See exactly where you are right now and the **next step to complete**.",
+      "",
+      "🏆 **Main goal:** Post your first win.",
+    ].join("\n"),
+    footer: {
+      text: "Most steps check themselves off automatically from your real Discord activity.",
+    },
+  };
 
   const components = [{
     type: 1,
@@ -322,12 +342,14 @@ export function buildRoadmapCard(config = {}) {
         style: 5,
         url: ONBOARDING_URL,
         label: "Onboarding Video",
+        emoji: { name: "👋" },
       },
       {
         type: 2,
         style: 5,
         url: FUNDAMENTALS_URL,
         label: "7-Day Fundamentals",
+        emoji: { name: "🧪" },
       },
     ],
   }];
@@ -340,11 +362,17 @@ export function buildRoadmapCard(config = {}) {
         style: 5,
         url: discordChannelUrl(config.guild_id, config.channels.start_here),
         label: "Full 90-Day Roadmap",
+        emoji: { name: "🗺️" },
       }],
     });
   }
 
-  return { content, components, allowed_mentions: { parse: [] } };
+  return {
+    content: "",
+    embeds: [embed],
+    components,
+    allowed_mentions: { parse: [] },
+  };
 }
 
 export function buildRoadmapModel(state) {
@@ -377,15 +405,40 @@ export function buildRoadmapModel(state) {
   };
 }
 
-async function buildRoadmapView(userId, env, stub) {
-  const state = await stub.getRoadmapV41State(userId);
+async function buildRoadmapView(userId, env, stub, allowPreview = false) {
+  const state = await stub.getRoadmapV41State(userId, allowPreview);
   if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
   const model = buildRoadmapModel(state);
-  const content = formatRoadmapView(model);
+
+  const description = model.win_complete
+    ? `**Progress:** ${model.completed}/${model.total}\n🏆 **First Win:** ✅ Complete${model.win_within_7_days ? " within 7 days" : ""}`
+    : `**Progress:** ${model.completed}/${model.total}\n🏆 **First Win:** ⬜ Not yet`;
+
+  const fields = [];
+  if (model.next) {
+    fields.push({
+      name: "☑️ Next Task",
+      value: `**${model.next.label}**${model.next.link ? `\n${model.next.link}` : ""}`,
+      inline: false,
+    });
+  } else {
+    fields.push({
+      name: "✅ Starter Roadmap Complete",
+      value: "Keep following the full 90-day roadmap and keep stacking wins.",
+      inline: false,
+    });
+  }
+
+  if (state.preview) {
+    fields.push({
+      name: "Preview Mode",
+      value: "Your owner account is not part of the tracked Dojo cohort, so this shows a clean new-member preview instead of an error.",
+      inline: false,
+    });
+  }
 
   const components = [];
   const primary = [];
-
   if (!model.win_complete && model.next?.key === "wins") {
     primary.push({
       type: 2,
@@ -399,10 +452,10 @@ async function buildRoadmapView(userId, env, stub) {
       type: 2,
       style: 5,
       url: discordChannelUrl(env.DISCORD_GUILD_ID, model.next.channel_id),
-      label: "Open Next Step",
+      label: "Open Task",
+      emoji: { name: "☑️" },
     });
   }
-
   primary.push({
     type: 2,
     style: 2,
@@ -413,8 +466,8 @@ async function buildRoadmapView(userId, env, stub) {
   components.push({ type: 1, components: primary });
 
   const resources = [
-    { type: 2, style: 5, url: ONBOARDING_URL, label: "Onboarding" },
-    { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Fundamentals" },
+    { type: 2, style: 5, url: ONBOARDING_URL, label: "Onboarding", emoji: { name: "👋" } },
+    { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Fundamentals", emoji: { name: "🧪" } },
   ];
   if (model.channels?.start_here) {
     resources.push({
@@ -422,11 +475,23 @@ async function buildRoadmapView(userId, env, stub) {
       style: 5,
       url: discordChannelUrl(env.DISCORD_GUILD_ID, model.channels.start_here),
       label: "Full Roadmap",
+      emoji: { name: "🗺️" },
     });
   }
   components.push({ type: 1, components: resources });
 
-  return { content, components };
+  return {
+    content: "",
+    embeds: [{
+      title: "🧭 Your Dojo Roadmap",
+      description,
+      fields,
+      footer: {
+        text: "Finish the task, then hit Refresh. Automatic steps check themselves off.",
+      },
+    }],
+    components,
+  };
 }
 
 export function formatRoadmapView(model) {

@@ -114,7 +114,8 @@ export async function handleV40Interaction(request, env, ctx) {
     ["activation-audit", "activation-queue", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:") ||
-    customId.startsWith("teamapp:v41:");
+    customId.startsWith("teamapp:v41:") ||
+    customId.startsWith("teamapp:v42:");
   if (!isV40) return null;
 
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
@@ -562,7 +563,7 @@ export async function attachTeamApplicationMessage(gateway, discordUserId, messa
   return { ok: true };
 }
 
-export async function updateTeamApplicationStatus(gateway, discordUserId, status, actorId) {
+export async function updateTeamApplicationStatus(gateway, discordUserId, status, actorId, reason = null) {
   if (!["accepted", "waitlisted", "declined"].includes(status)) return { ok: false, message: "Invalid application status." };
   const key = `${TEAM_APPLICATION_PREFIX}${String(discordUserId || "")}`;
   const application = await gateway.ctx.storage.get(key);
@@ -572,6 +573,7 @@ export async function updateTeamApplicationStatus(gateway, discordUserId, status
     status,
     status_updated_by: String(actorId || ""),
     status_updated_at: new Date().toISOString(),
+    decision_reason: status === "declined" ? String(reason || "").trim() || null : null,
     updated_at: new Date().toISOString(),
   };
   await gateway.ctx.storage.put(key, next);

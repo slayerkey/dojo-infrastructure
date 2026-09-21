@@ -458,9 +458,25 @@ async function resolveDiscordUserId(whopUserId, env) {
   if (!discordUserId || !env.MEMBER_LINKS) return discordUserId;
 
   const now = new Date().toISOString();
+  const reverseKey = `discord:${discordUserId}`;
+  const reverseCached = await env.MEMBER_LINKS.get(reverseKey, "json").catch(() => null);
   await Promise.all([
-    env.MEMBER_LINKS.put(`whop:${whopUserId}`, JSON.stringify({ discord_user_id: discordUserId, updated_at: now })),
-    env.MEMBER_LINKS.put(`discord:${discordUserId}`, JSON.stringify({ whop_user_id: whopUserId, updated_at: now })),
+    env.MEMBER_LINKS.put(
+      key,
+      JSON.stringify({
+        ...(cached && typeof cached === "object" ? cached : {}),
+        discord_user_id: discordUserId,
+        updated_at: now,
+      }),
+    ),
+    env.MEMBER_LINKS.put(
+      reverseKey,
+      JSON.stringify({
+        ...(reverseCached && typeof reverseCached === "object" ? reverseCached : {}),
+        whop_user_id: whopUserId,
+        updated_at: now,
+      }),
+    ),
   ]).catch(() => {});
   return discordUserId;
 }

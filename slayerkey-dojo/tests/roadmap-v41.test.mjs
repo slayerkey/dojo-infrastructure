@@ -161,7 +161,7 @@ test("targeted member state reads existing activation and team application witho
 
 
 
-test("owner preview mode works even when the owner is outside the tracked cohort", async () => {
+test("owner gets a persistent test cohort record instead of a disposable preview", async () => {
   const store = storage([
     ["roadmap:v41:config", { channels: { start_here: "123" } }],
   ]);
@@ -171,9 +171,14 @@ test("owner preview mode works even when the owner is outside the tracked cohort
   };
   const state = await getRoadmapV41State(gateway, "owner", true);
   assert.equal(state.ok, true);
-  assert.equal(state.preview, true);
+  assert.equal(state.preview, false);
+  assert.equal(state.test_mode, true);
   assert.equal(state.activation.first_win_posted, false);
   assert.equal(state.config.channels.start_here, "123");
+  assert.equal(store.values.get("activation:v3:member:owner").roadmap_test_record, true);
+
+  const second = await getRoadmapV41State(gateway, "owner", true);
+  assert.equal(second.test_mode, true);
 });
 
 test("roadmap state refuses users outside the known Dojo cohort", async () => {

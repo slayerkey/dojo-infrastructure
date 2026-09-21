@@ -1067,6 +1067,18 @@ function organizerApplicationModal() {
   });
 }
 
+function organizerDeclineModal(discordUserId) {
+  return Response.json({
+    type: 9,
+    data: {
+      custom_id: `teamapp:v43:organizer-decline-submit:${discordUserId}`,
+      title: "Decline Organizer Application",
+      components: [
+        textInput("decline_reason", "Reason", true, 2, 3, 500, "Why are we declining this organizer application?"),
+      ],
+    },
+  });
+}
 function teamApplicationDeclineModal(discordUserId) {
   return Response.json({
     type: 9,
@@ -1140,7 +1152,7 @@ function buildTeamApplicationEmbed(application) {
     { name: "Peak Rank", value: escapeDiscord(application.peak_rank), inline: true },
     { name: "Role / Agents", value: escapeDiscord(application.role_agents), inline: false },
     { name: "Availability", value: escapeDiscord(application.availability), inline: false },
-    { name: "Tracker", value: `[Open Riot Tracker](${application.tracker_link})`, inline: false },
+    { name: "Riot ID / Tracker", value: formatRiotIdentity(application.tracker_link), inline: false },
   ];
 
   if (application.team_goal) fields.push({ name: "What They Want", value: escapeDiscord(application.team_goal), inline: false });
@@ -1198,6 +1210,67 @@ function regionFlag(region) {
 
 function regionName(region) {
   return String(region || "").toUpperCase() === "EU" ? "Europe" : "North America";
+}
+function buildOrganizerApplicationMessage(application) {
+  return {
+    content: "",
+    embeds: [buildOrganizerApplicationEmbed(application)],
+    components: organizerApplicationStatusButtons(application),
+    allowed_mentions: { parse: [] },
+  };
+}
+
+function buildOrganizerApplicationEmbed(application) {
+  const status = String(application?.status || "pending").toLowerCase();
+  const statusText = status === "accepted" ? "✅ ACCEPTED" : status === "declined" ? "❌ DECLINED" : "🟡 PENDING";
+  const displayName = resolveDisplayName(application.discord_user_id, application, application);
+  const fields = [
+    { name: "Status", value: `**${statusText}**`, inline: true },
+    { name: "Region", value: `${regionFlag(application.region)} ${regionName(application.region)}`, inline: true },
+    { name: "Submitted", value: relativeDiscordTime(application.submitted_at), inline: true },
+    { name: "Member", value: `<@${application.discord_user_id}>\n${escapeDiscord(displayName)}\n\`${application.discord_user_id}\``, inline: false },
+    { name: "Riot ID / Tracker", value: formatRiotIdentity(application.riot_or_tracker), inline: false },
+    { name: "Availability", value: escapeDiscord(application.availability), inline: false },
+    { name: "Why Organize?", value: escapeDiscord(application.why_organize), inline: false },
+  ];
+  if (application.experience) fields.push({ name: "Relevant Experience", value: escapeDiscord(application.experience), inline: false });
+  if (application.decision_reason) fields.push({ name: "Decline Reason", value: escapeDiscord(application.decision_reason), inline: false });
+
+  return {
+    title: "🧑‍✈️ Premier Team Organizer Application",
+    fields,
+    footer: { text: "Accept records the decision only. Add the organizer role/team access manually." },
+  };
+}
+
+function organizerApplicationStatusButtons(application) {
+  const status = String(application?.status || "pending");
+  const id = String(application?.discord_user_id || "");
+  return [{
+    type: 1,
+    components: [
+      { type: 2, style: 3, custom_id: `teamapp:v43:organizer-accepted:${id}`, label: "Accept", disabled: status === "accepted" },
+      { type: 2, style: 4, custom_id: `teamapp:v43:organizer-decline:${id}`, label: "Decline", disabled: status === "declined" },
+    ],
+  }];
+}
+
+async function refreshStoredOrganizerApplicationMessage(application, env, stub) {
+  if (!application?.application_message_id) return false;
+  const config = await stub.getTeamApplicationConfig();
+  if (!config?.channel_id) return false;
+  await discordJson(
+    `${DISCORD_API}/channels/${config.channel_id}/messages/${application.application_message_id}`,
+    env,
+    { method: "PATCH", body: JSON.stringify(buildOrganizerApplicationMessage(application)) },
+  );
+  return true;
+}
+
+function formatRiotIdentity(value) {
+  const text = String(value || "").trim();
+  if (/^https?:\/\//i.test(text)) return `[Open Tracker](${text})`;
+  return `\`${escapeDiscord(text)}\``;
 }
 async function fetchCurrentDojoMembers(env) {
   const roleId = String(env.DISCORD_DOJO_ROLE_ID || "");

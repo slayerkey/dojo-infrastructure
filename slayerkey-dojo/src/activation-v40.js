@@ -814,11 +814,7 @@ async function publishTeamApplication(application, env, stub) {
 
   const message = await discordJson(`${DISCORD_API}/channels/${config.channel_id}/messages`, env, {
     method: "POST",
-    body: JSON.stringify({
-      content: renderTeamApplication(application),
-      components: teamApplicationStatusButtons(application),
-      allowed_mentions: { parse: [] },
-    }),
+    body: JSON.stringify(buildTeamApplicationMessage(application)),
   });
   if (message?.id) await stub.attachTeamApplicationMessage(application.discord_user_id, message.id);
   return message;
@@ -901,7 +897,7 @@ function quickTeamApplicationModal(region) {
     type: 9,
     data: {
       custom_id: "teamapp:v41:quick-submit",
-      title: `Premier Application — ${region}`,
+      title: `${regionFlag(region)} ${regionName(region)} Application`,
       components: [
         textInput("current_rank", "Current rank", true, 1, 2, 40, "Example: Diamond 2"),
         textInput("peak_rank", "Peak rank", true, 1, 2, 40, "Example: Ascendant 1"),

@@ -1,8 +1,10 @@
 import legacy, { DiscordGateway as DiscordGatewayV39 } from "./index-v39.js";
 import {
   applyActivationIntervention,
+  attachOrganizerApplicationMessage,
   attachTeamApplicationMessage,
   claimV40CommandRegistration,
+  completeOrganizerApplication,
   completeTeamApplication,
   completeV40CommandRegistration,
   ensureV40CommandsOnce,
@@ -16,6 +18,7 @@ import {
   saveTeamApplicationDraft,
   setPremierPublicCardConfig,
   setTeamApplicationConfig,
+  updateOrganizerApplicationStatus,
   updateTeamApplicationStatus,
 } from "./activation-v40.js";
 
@@ -113,6 +116,10 @@ export class DiscordGateway extends DiscordGatewayV39 {
     return completeTeamApplication(this, discordUserId, interactionId, fields, identity);
   }
 
+  async completeOrganizerApplication(discordUserId, interactionId, fields, identity) {
+    return completeOrganizerApplication(this, discordUserId, interactionId, fields, identity);
+  }
+
   async setTeamApplicationConfig(config) {
     return setTeamApplicationConfig(this, config);
   }
@@ -133,7 +140,15 @@ export class DiscordGateway extends DiscordGatewayV39 {
     return attachTeamApplicationMessage(this, discordUserId, messageId);
   }
 
+  async attachOrganizerApplicationMessage(discordUserId, messageId) {
+    return attachOrganizerApplicationMessage(this, discordUserId, messageId);
+  }
+
   async updateTeamApplicationStatus(discordUserId, status, actorId, reason = null) {
     return updateTeamApplicationStatus(this, discordUserId, status, actorId, reason);
+  }
+
+  async updateOrganizerApplicationStatus(discordUserId, status, actorId, reason = null) {
+    return updateOrganizerApplicationStatus(this, discordUserId, status, actorId, reason);
   }
 }

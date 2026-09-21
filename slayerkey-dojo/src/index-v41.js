@@ -1,5 +1,9 @@
 import legacy, { DiscordGateway as DiscordGatewayV40 } from "./index-v40.js";
 import {
+  handleCustomerIdentityBridge,
+  syncActivationPosthogBatch,
+} from "./posthog-journey.js";
+import {
   claimRoadmapV41CommandRegistration,
   completeRoadmapV41CommandRegistration,
   ensureRoadmapV41CommandsOnce,
@@ -15,6 +19,10 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/internal/customer-identity") {
+      return handleCustomerIdentityBridge(request, env);
+    }
+
     if (url.pathname === "/discord/interactions" && request.method === "POST") {
       const roadmapCopy = request.clone();
       const delegated = request.clone();
@@ -28,6 +36,24 @@ export default {
       try {
         const body = await response.clone().json();
         body.discord = body.discord || {};
+        body.discord.customer_journey = {
+          version: "posthog-v1",
+          activation_source: "v40",
+          identity: "whop-to-posthog-via-member-links",
+          delivery: "scheduled-reconciliation",
+          posthog_configured: Boolean(env.POSTHOG_PROJECT_TOKEN),
+          identity_bridge_configured: Boolean(env.DOJO_IDENTITY_BRIDGE_SECRET),
+          events: [
+            "introduction_posted",
+            "replied_to_two_members",
+            "first_training_post",
+            "first_general_message",
+            "goal_posted",
+            "riot_linked",
+            "first_win_posted",
+            "first_win_within_7_days",
+          ],
+        };
         body.discord.roadmap = {
           version: "v41",
           persistent_card: true,
@@ -52,13 +78,25 @@ export default {
     }
     const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
     if (!stub) return;
-    await ensureRoadmapV41CommandsOnce(env, stub).catch((error) => {
-      console.error("v41 roadmap command registration failed:", error);
-    });
+    const tasks = [
+      ensureRoadmapV41CommandsOnce(env, stub),
+      stub.syncActivationPosthogBatch(),
+    ];
+    const settled = await Promise.allSettled(tasks);
+    if (settled[0]?.status === "rejected") {
+      console.error("v41 roadmap command registration failed:", settled[0].reason);
+    }
+    if (settled[1]?.status === "rejected") {
+      console.error("PostHog customer journey reconciliation failed without blocking Discord:", settled[1].reason);
+    }
   },
 };
 
 export class DiscordGateway extends DiscordGatewayV40 {
+  async syncActivationPosthogBatch() {
+    return syncActivationPosthogBatch(this);
+  }
+
   async claimRoadmapV41CommandRegistration(version) {
     return claimRoadmapV41CommandRegistration(this, version);
   }

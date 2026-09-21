@@ -16,6 +16,7 @@ import {
   completeTeamApplication,
   recordActivationCheckinWin,
   saveTeamApplicationDraft,
+  updateTeamApplicationStatus,
 } from "../src/activation-v40.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
@@ -436,4 +437,70 @@ test("quick Premier application does not require a team-goal essay", () => {
   });
   assert.equal(result.region, "EU");
   assert.equal(result.team_goal, null);
+});
+
+
+test("Premier region helpers use flag-first North America and Europe labels", () => {
+  assert.equal(v40.regionFlag("NA"), "🇺🇸");
+  assert.equal(v40.regionName("NA"), "North America");
+  assert.equal(v40.regionFlag("EU"), "🇪🇺");
+  assert.equal(v40.regionName("EU"), "Europe");
+});
+
+test("Premier organizer application renders as a box with status first and no waitlist button", () => {
+  const application = {
+    discord_user_id: "100",
+    display_name: "Applicant",
+    region: "NA",
+    status: "pending",
+    current_rank: "Diamond 1",
+    peak_rank: "Ascendant 1",
+    role_agents: "Controller — Omen",
+    availability: "Weeknights MST",
+    tracker_link: "https://tracker.gg/valorant/profile/example",
+    submitted_at: "2026-09-21T10:00:00.000Z",
+  };
+  const embed = v40.buildTeamApplicationEmbed(application);
+  assert.equal(embed.title, "🇺🇸 North America Premier Application");
+  assert.equal(embed.fields[0].name, "Status");
+  assert.match(embed.fields[0].value, /PENDING/);
+  const buttons = v40.teamApplicationStatusButtons(application)[0].components;
+  assert.deepEqual(buttons.map((button) => button.label), ["Accept", "Decline"]);
+});
+
+test("decline reason is stored internally and shown on the organizer box", async () => {
+  const { values, storage } = mockStorage([
+    ["teamapp:v40:application:100", {
+      discord_user_id: "100",
+      display_name: "Applicant",
+      region: "EU",
+      status: "pending",
+      current_rank: "Gold 3",
+      peak_rank: "Platinum 2",
+      role_agents: "Sentinel — Cypher",
+      availability: "Weekends CET",
+      tracker_link: "https://tracker.gg/valorant/profile/example",
+      submitted_at: "2026-09-21T10:00:00.000Z",
+    }],
+  ]);
+  const gateway = { ctx: { storage } };
+  const updated = await updateTeamApplicationStatus(gateway, "100", "declined", "owner", "Need a more consistent schedule.");
+  assert.equal(updated.ok, true);
+  assert.equal(updated.application.status, "declined");
+  assert.equal(updated.application.decision_reason, "Need a more consistent schedule.");
+  const embed = v40.buildTeamApplicationEmbed(updated.application);
+  assert.equal(embed.fields.at(-1).name, "Decline Reason");
+  assert.match(embed.fields.at(-1).value, /consistent schedule/);
+});
+
+test("tracker.gg links without https are normalized for the short Premier application", () => {
+  const result = validateTeamApplication({
+    region: "NA",
+    current_rank: "Diamond 1",
+    peak_rank: "Ascendant 1",
+    role_agents: "Initiator — Sova",
+    availability: "Weeknights MST",
+    tracker_link: "tracker.gg/valorant/profile/riot/example",
+  });
+  assert.equal(result.tracker_link, "https://tracker.gg/valorant/profile/riot/example");
 });

@@ -109,7 +109,7 @@ export async function syncActivationPosthogMember(gateway, discordUserId, record
   return { ok: pending === 0, emitted, pending };
 }
 
-export async function syncActivationPosthogBatch(gateway, { limit = 100 } = {}) {
+export async function syncActivationPosthogBatch(gateway) {
   const rows = await gateway.ctx.storage.list({ prefix: MEMBER_PREFIX });
   const tenures = await gateway.listTenureRecords?.().catch(() => []);
   const tenureById = new Map(
@@ -122,7 +122,6 @@ export async function syncActivationPosthogBatch(gateway, { limit = 100 } = {}) 
   let failed = 0;
 
   for (const [key, value] of rows.entries()) {
-    if (checked >= Math.max(1, Number(limit) || 100)) break;
     const userId = String(key).slice(MEMBER_PREFIX.length);
     if (!userId) continue;
     checked += 1;

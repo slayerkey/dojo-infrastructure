@@ -1525,9 +1525,12 @@ export const __test = Object.freeze({
   commandSignature,
   formatQueueMember,
   formatV40Audit,
+  buildOrganizerApplicationEmbed,
+  buildOrganizerApplicationMessage,
   buildTeamApplicationEmbed,
   buildTeamApplicationMessage,
   regionFlag,
+  organizerApplicationStatusButtons,
   regionName,
   teamApplicationStatusButtons,
 });

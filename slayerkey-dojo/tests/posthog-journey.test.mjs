@@ -11,9 +11,10 @@ import {
 } from "../src/posthog-journey.js";
 import {
   looksAnnual,
-  resolveDiscordUserId,
+  mergeDiscordMemberLink,
+  mergeWhopMemberLink,
   tenureRoleKey,
-} from "../src/index-v25.js";
+} from "../src/membership-core.js";
 import {
   ACTIVATION_DESTINATIONS,
   MEMBER_PREFIX,
@@ -297,29 +298,20 @@ test("existing membership tenure role logic still distinguishes monthly tenure a
   assert.equal(looksAnnual({ title: "Monthly Dojo", billing_period: 30 }), false);
 });
 
-test("membership social-account sync preserves an existing Whop to PostHog mapping", async () => {
-  const memberLinks = memoryKv([
-    ["whop:user_preserve", { posthog_distinct_id: "browser_preserve", posthog_identity_source: "website_posthog_distinct_id" }],
-  ]);
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({
-    ok: true,
-    async json() {
-      return { data: [{ service: "discord", account_id: "424242" }] };
-    },
-  });
-  try {
-    const discordId = await resolveDiscordUserId("user_preserve", {
-      WHOP_API_KEY: "whop_test",
-      MEMBER_LINKS: memberLinks,
-    });
-    assert.equal(discordId, "424242");
-    const stored = await memberLinks.get("whop:user_preserve", "json");
-    assert.equal(stored.discord_user_id, "424242");
-    assert.equal(stored.posthog_distinct_id, "browser_preserve");
-    const reverse = await memberLinks.get("discord:424242", "json");
-    assert.equal(reverse.whop_user_id, "user_preserve");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("membership link merging preserves an existing Whop to PostHog mapping", () => {
+  const existingWhop = {
+    posthog_distinct_id: "browser_preserve",
+    posthog_identity_source: "website_posthog_distinct_id",
+  };
+  const mergedWhop = mergeWhopMemberLink(existingWhop, "424242", "2026-09-21T00:00:00.000Z");
+  assert.equal(mergedWhop.discord_user_id, "424242");
+  assert.equal(mergedWhop.posthog_distinct_id, "browser_preserve");
+
+  const mergedDiscord = mergeDiscordMemberLink(
+    { another_server_field: "kept" },
+    "user_preserve",
+    "2026-09-21T00:00:00.000Z",
+  );
+  assert.equal(mergedDiscord.whop_user_id, "user_preserve");
+  assert.equal(mergedDiscord.another_server_field, "kept");
 });

@@ -1,4 +1,10 @@
 import legacy, { DiscordGateway as DiscordGatewayV24 } from "./index-v24.js";
+import {
+  looksAnnual,
+  mergeDiscordMemberLink,
+  mergeWhopMemberLink,
+  tenureRoleKey,
+} from "./membership-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const WHOP_API = "https://api.whop.com/api/v1";
@@ -334,22 +340,6 @@ async function applyManagedRoles(discordUserId, record, roles, env) {
   return { ok: true };
 }
 
-function tenureRoleKey(firstEligibleAt, now = new Date()) {
-  const months = fullMonthsSince(firstEligibleAt, now);
-  if (months < 1) return null;
-  return `m${Math.min(months, 6)}`;
-}
-
-function fullMonthsSince(iso, now = new Date()) {
-  const start = new Date(iso);
-  if (!Number.isFinite(start.getTime()) || start > now) return 0;
-  let months = (now.getUTCFullYear() - start.getUTCFullYear()) * 12 + (now.getUTCMonth() - start.getUTCMonth());
-  const lastDayThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-  const anniversaryDay = Math.min(start.getUTCDate(), lastDayThisMonth);
-  if (now.getUTCDate() < anniversaryDay) months -= 1;
-  return Math.max(0, months);
-}
-
 async function fetchCurrentDojoMemberships(env) {
   return fetchPaged("/memberships", env, (params) => {
     params.append("company_id", env.WHOP_COMPANY_ID);
@@ -425,14 +415,6 @@ async function isAnnualMembership(membership, env, planCache) {
   return looksAnnual(plan);
 }
 
-function looksAnnual(plan) {
-  if (!plan || typeof plan !== "object") return false;
-  if (Number(plan.billing_period || 0) >= 300) return true;
-  if (Number(plan.expiration_days || 0) >= 300) return true;
-  const text = `${plan.title || ""} ${plan.description || ""}`.toLowerCase();
-  return /\bannual\b|\byearly\b|\b1\s*year\b|\b12\s*month/.test(text);
-}
-
 async function fetchWhopPlan(planId, env) {
   const response = await fetch(`${WHOP_API}/plans/${encodeURIComponent(planId)}`, {
     headers: { Authorization: `Bearer ${env.WHOP_API_KEY}` },
@@ -458,9 +440,17 @@ async function resolveDiscordUserId(whopUserId, env) {
   if (!discordUserId || !env.MEMBER_LINKS) return discordUserId;
 
   const now = new Date().toISOString();
+  const reverseKey = `discord:${discordUserId}`;
+  const reverseCached = await env.MEMBER_LINKS.get(reverseKey, "json").catch(() => null);
   await Promise.all([
-    env.MEMBER_LINKS.put(`whop:${whopUserId}`, JSON.stringify({ discord_user_id: discordUserId, updated_at: now })),
-    env.MEMBER_LINKS.put(`discord:${discordUserId}`, JSON.stringify({ whop_user_id: whopUserId, updated_at: now })),
+    env.MEMBER_LINKS.put(
+      key,
+      JSON.stringify(mergeWhopMemberLink(cached, discordUserId, now)),
+    ),
+    env.MEMBER_LINKS.put(
+      reverseKey,
+      JSON.stringify(mergeDiscordMemberLink(reverseCached, whopUserId, now)),
+    ),
   ]).catch(() => {});
   return discordUserId;
 }

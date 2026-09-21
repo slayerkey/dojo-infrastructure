@@ -415,14 +415,6 @@ async function isAnnualMembership(membership, env, planCache) {
   return looksAnnual(plan);
 }
 
-export function looksAnnual(plan) {
-  if (!plan || typeof plan !== "object") return false;
-  if (Number(plan.billing_period || 0) >= 300) return true;
-  if (Number(plan.expiration_days || 0) >= 300) return true;
-  const text = `${plan.title || ""} ${plan.description || ""}`.toLowerCase();
-  return /\bannual\b|\byearly\b|\b1\s*year\b|\b12\s*month/.test(text);
-}
-
 async function fetchWhopPlan(planId, env) {
   const response = await fetch(`${WHOP_API}/plans/${encodeURIComponent(planId)}`, {
     headers: { Authorization: `Bearer ${env.WHOP_API_KEY}` },

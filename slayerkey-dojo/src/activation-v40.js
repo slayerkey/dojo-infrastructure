@@ -329,21 +329,47 @@ export async function handleV40Interaction(request, env, ctx) {
     return deferredEphemeral();
   }
 
+  if (customId.startsWith("teamapp:v42:decline:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can decline applications.");
+    const targetId = customId.split(":").pop();
+    if (!targetId) return ephemeralMessage("That application could not be identified.");
+    return teamApplicationDeclineModal(targetId);
+  }
+
+  if (customId.startsWith("teamapp:v42:decline-submit:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can decline applications.");
+    const targetId = customId.split(":").pop();
+    const reason = modalValue(interaction, "decline_reason");
+    if (!targetId || !reason) return ephemeralMessage("A decline reason is required.");
+    const updated = await stub.updateTeamApplicationStatus(targetId, "declined", userId, reason);
+    if (!updated?.ok) return ephemeralMessage(updated?.message || "Application could not be updated.");
+    ctx.waitUntil(refreshStoredTeamApplicationMessage(updated.application, env, stub).catch((error) => {
+      console.error("Could not refresh declined team application:", error);
+    }));
+    return ephemeralMessage("Application declined and the reason was saved for the team organizers.");
+  }
+
+  if (customId.startsWith("teamapp:v42:accepted:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can accept applications.");
+    const targetId = customId.split(":").pop();
+    const updated = await stub.updateTeamApplicationStatus(targetId, "accepted", userId, null);
+    if (!updated?.ok) return ephemeralMessage(updated?.message || "Application could not be updated.");
+    return Response.json({
+      type: 7,
+      data: buildTeamApplicationMessage(updated.application),
+    });
+  }
   if (customId.startsWith("teamapp:v40:status:")) {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can change application status.");
     const [, , , status, targetId] = customId.split(":");
     if (!["accepted", "waitlisted", "declined"].includes(status) || !targetId) {
       return ephemeralMessage("That team application action is invalid.");
     }
-    const updated = await stub.updateTeamApplicationStatus(targetId, status, userId);
+    const updated = await stub.updateTeamApplicationStatus(targetId, status, userId, null);
     if (!updated?.ok) return ephemeralMessage(updated?.message || "Application could not be updated.");
     return Response.json({
       type: 7,
-      data: {
-        content: renderTeamApplication(updated.application),
-        components: teamApplicationStatusButtons(updated.application),
-        allowed_mentions: { parse: [] },
-      },
+      data: buildTeamApplicationMessage(updated.application),
     });
   }
 

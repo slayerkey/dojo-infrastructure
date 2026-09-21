@@ -1,0 +1,44 @@
+name: Verify Dojo Production Runtime
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'slayerkey-dojo/**'
+      - '.github/workflows/verify-production.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify production Worker health
+        shell: bash
+        env:
+          HEALTH_URL: https://dojo-rr-tracker.mystd.workers.dev/health
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 36); do
+            body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
+            if [[ -n "$body" ]] && HEALTH_JSON="$body" node - <<'NODE'
+          const body = JSON.parse(process.env.HEALTH_JSON || "{}");
+          const roadmap = body?.discord?.roadmap?.version;
+          const journey = body?.discord?.customer_journey || {};
+          if (roadmap !== "v41" || journey.version !== "posthog-v1") process.exit(1);
+          console.log(JSON.stringify({
+            roadmap_version: roadmap,
+            customer_journey_version: journey.version,
+            posthog_configured: Boolean(journey.posthog_configured),
+            identity_bridge_configured: Boolean(journey.identity_bridge_configured),
+            delivery: journey.delivery || null
+          }));
+NODE
+            then
+              exit 0
+            fi
+            echo "Production runtime not updated yet (attempt $attempt/36)."
+            sleep 10
+          done
+          echo "Production Worker did not expose the expected runtime version."
+          exit 1

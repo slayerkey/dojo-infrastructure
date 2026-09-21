@@ -24,6 +24,7 @@ const INTERVENTION_PREFIX = "activation:v40:intervention:";
 const TEAM_CONFIG_KEY = "teamapp:v40:config";
 const TEAM_DRAFT_PREFIX = "teamapp:v40:draft:";
 const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
+const ORGANIZER_APPLICATION_PREFIX = "teamapp:v43:organizer:";
 const TEAM_PUBLIC_CARD_KEY = "teamapp:v41:public-card";
 const PREMIER_INFO_MESSAGE_URL = "https://discord.com/channels/1494446702378221590/1529539108597268510/1529545999889072322";
 const encoder = new TextEncoder();
@@ -115,7 +116,8 @@ export async function handleV40Interaction(request, env, ctx) {
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
-    customId.startsWith("teamapp:v42:");
+    customId.startsWith("teamapp:v42:") ||
+    customId.startsWith("teamapp:v43:");
   if (!isV40) return null;
 
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
@@ -199,6 +201,11 @@ export async function handleV40Interaction(request, env, ctx) {
     return quickTeamApplicationModal(region);
   }
 
+  if (customId === "teamapp:v43:organizer") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to apply as a Premier Team Organizer.");
+    return organizerApplicationModal();
+  }
+
   if (customId.startsWith("actv40:mark-sent:")) {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can mark activation outreach.");
     const [, , stage, targetId] = customId.split(":");
@@ -259,6 +266,38 @@ export async function handleV40Interaction(request, env, ctx) {
           components: [],
         }))
         .catch((error) => failInteraction(interaction, env, "Your win was recorded, but the Wins post failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
+  if (customId === "teamapp:v43:organizer-submit") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to submit an organizer application.");
+    let application;
+    try {
+      application = await stub.completeOrganizerApplication(
+        userId,
+        String(interaction.id || ""),
+        {
+          region: modalValue(interaction, "region"),
+          riot_or_tracker: modalValue(interaction, "riot_or_tracker"),
+          availability: modalValue(interaction, "availability"),
+          why_organize: modalValue(interaction, "why_organize"),
+          experience: modalValue(interaction, "experience"),
+        },
+        identityFromInteraction(interaction),
+      );
+    } catch (error) {
+      return ephemeralMessage(`Organizer application could not be saved: ${safeError(error)}`);
+    }
+    if (!application?.ok) return ephemeralMessage(application?.message || "Organizer application could not be saved.");
+    if (application.duplicate) return ephemeralMessage("Your organizer application was already submitted. I did not create a duplicate.");
+
+    ctx.waitUntil(
+      publishOrganizerApplication(application.application, env, stub)
+        .then(() => editOriginalInteraction(interaction, env, {
+          content: "Your Premier Team Organizer application was submitted.",
+        }))
+        .catch((error) => failInteraction(interaction, env, "Organizer application saved, but staff delivery failed", error)),
     );
     return deferredEphemeral();
   }
@@ -712,6 +751,7 @@ async function setupPremierPublicCard(interaction, env, stub) {
         components: [
           { type: 2, style: 1, custom_id: "teamapp:v41:start:NA", label: "North America", emoji: { name: "🇺🇸" } },
           { type: 2, style: 1, custom_id: "teamapp:v41:start:EU", label: "Europe", emoji: { name: "🇪🇺" } },
+          { type: 2, style: 2, custom_id: "teamapp:v43:organizer", label: "Team Organizer", emoji: { name: "🧑‍✈️" } },
           { type: 2, style: 5, url: PREMIER_INFO_MESSAGE_URL, label: "Premier Info" },
         ],
       },
@@ -744,7 +784,7 @@ async function setupPremierPublicCard(interaction, env, stub) {
   });
 
   await editOriginalInteraction(interaction, env, {
-    content: "Premier application buttons are live in this channel: **🇺🇸 North America** and **🇪🇺 Europe**.",
+    content: "Premier application buttons are live in this channel: **🇺🇸 North America**, **🇪🇺 Europe**, and **🧑‍✈️ Team Organizer**.",
   });
 }
 export async function setPremierPublicCardConfig(gateway, config) {

@@ -649,6 +649,72 @@ export async function updateTeamApplicationStatus(gateway, discordUserId, status
   return { ok: true, application: next };
 }
 
+export async function completeOrganizerApplication(gateway, discordUserId, interactionId, fields, identity) {
+  const userId = String(discordUserId || "");
+  const key = `${ORGANIZER_APPLICATION_PREFIX}${userId}`;
+  const existing = await gateway.ctx.storage.get(key);
+  if (existing?.last_interaction_id === String(interactionId || "")) {
+    return { ok: true, duplicate: true, application: existing };
+  }
+
+  const region = String(fields?.region || "").trim().toUpperCase();
+  const riotOrTracker = String(fields?.riot_or_tracker || "").trim();
+  const availability = String(fields?.availability || "").trim();
+  const whyOrganize = String(fields?.why_organize || "").trim();
+  const experience = String(fields?.experience || "").trim() || null;
+
+  if (!["NA", "EU"].includes(region)) throw new Error("Region must be NA or EU.");
+  if (!riotOrTracker || riotOrTracker.length > 500) throw new Error("Riot ID or Tracker is required.");
+  if (!availability || availability.length > 400) throw new Error("Availability is required.");
+  if (!whyOrganize || whyOrganize.length > 700) throw new Error("Why you want to organize is required.");
+
+  const application = mergeIdentityIntoRecord({
+    version: 1,
+    application_type: "organizer",
+    discord_user_id: userId,
+    region,
+    riot_or_tracker: riotOrTracker,
+    availability,
+    why_organize: whyOrganize,
+    experience,
+    status: "pending",
+    submitted_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_interaction_id: String(interactionId || ""),
+    application_message_id: null,
+  }, { ...(identity || {}), discord_user_id: userId });
+
+  await gateway.ctx.storage.put(key, application);
+  return { ok: true, duplicate: false, application };
+}
+
+export async function attachOrganizerApplicationMessage(gateway, discordUserId, messageId) {
+  const key = `${ORGANIZER_APPLICATION_PREFIX}${String(discordUserId || "")}`;
+  const application = await gateway.ctx.storage.get(key);
+  if (!application) return { ok: false };
+  application.application_message_id = String(messageId || "");
+  application.updated_at = new Date().toISOString();
+  await gateway.ctx.storage.put(key, application);
+  return { ok: true };
+}
+
+export async function updateOrganizerApplicationStatus(gateway, discordUserId, status, actorId, reason = null) {
+  if (!["accepted", "declined"].includes(status)) return { ok: false, message: "Invalid organizer application status." };
+  const key = `${ORGANIZER_APPLICATION_PREFIX}${String(discordUserId || "")}`;
+  const application = await gateway.ctx.storage.get(key);
+  if (!application) return { ok: false, message: "Organizer application not found." };
+  const next = {
+    ...application,
+    status,
+    status_updated_by: String(actorId || ""),
+    status_updated_at: new Date().toISOString(),
+    decision_reason: status === "declined" ? String(reason || "").trim() || null : null,
+    updated_at: new Date().toISOString(),
+  };
+  await gateway.ctx.storage.put(key, next);
+  return { ok: true, application: next };
+}
+
 async function runV40Audit(interaction, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
   await editOriginalInteraction(interaction, env, { content: formatV40Audit(runtime.model) });

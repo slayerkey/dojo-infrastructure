@@ -3,19 +3,25 @@ import {
   applyActivationIntervention,
   attachOrganizerApplicationMessage,
   attachTeamApplicationMessage,
+  claimDailyDigestDate,
   claimV40CommandRegistration,
   completeOrganizerApplication,
   completeTeamApplication,
   completeV40CommandRegistration,
+  disableLegacyActivityReport,
   ensureV40CommandsOnce,
   failV40CommandRegistration,
   getActivationV40Snapshot,
+  getDailyDigestConfig,
   getPremierPublicCardConfig,
   getTeamApplicationConfig,
   handleV40Interaction,
   hydrateActivationIdentities,
   recordActivationCheckinWin,
+  releaseDailyDigestDate,
+  runDailyDigestScheduler,
   saveTeamApplicationDraft,
+  setDailyDigestConfig,
   setPremierPublicCardConfig,
   setTeamApplicationConfig,
   updateOrganizerApplicationStatus,
@@ -73,9 +79,17 @@ export default {
     }
     const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
     if (!stub) return;
-    await ensureV40CommandsOnce(env, stub).catch((error) => {
-      console.error("v40 command registration failed:", error);
-    });
+    const tasks = [
+      ensureV40CommandsOnce(env, stub),
+      runDailyDigestScheduler(env, stub),
+    ];
+    const settled = await Promise.allSettled(tasks);
+    if (settled[0]?.status === "rejected") {
+      console.error("v40 command registration failed:", settled[0].reason);
+    }
+    if (settled[1]?.status === "rejected") {
+      console.error("Daily Digest scheduler failed:", settled[1].reason);
+    }
   },
 };
 
@@ -94,6 +108,26 @@ export class DiscordGateway extends DiscordGatewayV39 {
 
   async getActivationV40Snapshot() {
     return getActivationV40Snapshot(this);
+  }
+
+  async setDailyDigestConfig(config) {
+    return setDailyDigestConfig(this, config);
+  }
+
+  async getDailyDigestConfig() {
+    return getDailyDigestConfig(this);
+  }
+
+  async claimDailyDigestDate(dateKey) {
+    return claimDailyDigestDate(this, dateKey);
+  }
+
+  async releaseDailyDigestDate(dateKey) {
+    return releaseDailyDigestDate(this, dateKey);
+  }
+
+  async disableLegacyActivityReport() {
+    return disableLegacyActivityReport(this);
   }
 
   async hydrateActivationIdentities(identities) {

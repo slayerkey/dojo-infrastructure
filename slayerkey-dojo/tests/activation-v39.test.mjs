@@ -135,6 +135,19 @@ test("pre-membership messages never create milestones", () => {
   assert.equal(core.deriveMember(r).first_win_posted, false);
 });
 
+test("unknown anchor stores factual historical evidence without turning it into timed activation", () => {
+  let r = core.mergeTenureIntoRecord({}, "100", { active: true });
+  r = core.applyActivationMessage(r, {
+    message: message("100", "2026-08-15T12:00:00Z"),
+    destinationKey: "introductions",
+  });
+  const d = core.deriveMember(r);
+  assert.equal(d.anchor_valid, false);
+  assert.equal(d.introduction_posted, false);
+  assert.equal(d.introduction_observed, true);
+  assert.equal(d.observed_introduction_at, "2026-08-15T12:00:00.000Z");
+});
+
 test("unknown activation anchor stays unknown instead of becoming false activation data", () => {
   const r = core.mergeTenureIntoRecord({}, "100", { active: true });
   const d = core.deriveMember(r);

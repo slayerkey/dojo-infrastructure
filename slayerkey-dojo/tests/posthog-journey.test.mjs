@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 import {
   handleCustomerIdentityBridge,
@@ -160,6 +160,36 @@ test("identity bridge accepts authenticated server handoff and preserves existin
   const stored = await memberLinks.get("whop:user_handoff", "json");
   assert.equal(stored.discord_user_id, "555001");
   assert.equal(stored.posthog_distinct_id, "browser_handoff");
+});
+
+test("identity bridge derives the shared signing key from the Whop API key", async () => {
+  const apiKey = "whop_shared_api_key_test";
+  const derivedSecret = createHmac("sha256", apiKey)
+    .update("slayerkey-dojo-identity-bridge-v1")
+    .digest("hex");
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const rawBody = JSON.stringify({
+    whop_user_id: "user_api_key_bridge",
+    posthog_distinct_id: "browser_api_key_bridge",
+  });
+  const signature = await signIdentityBridgeBody(derivedSecret, timestamp, rawBody);
+  const request = new Request("https://worker.example/internal/customer-identity", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Slayerkey-Timestamp": timestamp,
+      "X-Slayerkey-Signature": `sha256=${signature}`,
+    },
+    body: rawBody,
+  });
+  const memberLinks = memoryKv();
+  const response = await handleCustomerIdentityBridge(request, {
+    WHOP_API_KEY: apiKey,
+    MEMBER_LINKS: memberLinks,
+  });
+  assert.equal(response.status, 200);
+  const stored = await memberLinks.get("whop:user_api_key_bridge", "json");
+  assert.equal(stored.posthog_distinct_id, "browser_api_key_bridge");
 });
 
 test("identity bridge rejects an invalid signature", async () => {

@@ -59,12 +59,39 @@ export const V40_COMMANDS = Object.freeze([
     type: 1,
   },
   {
+    name: "task-stage-scan",
+    description: "Scan task forum tags and update each member's latest Fundamentals task stage",
+    type: 1,
+  },
+  {
     name: "activation-checkin-preview",
     description: "Preview the first-win check-in for one member without sending it",
     type: 1,
     options: [{
       name: "member",
       description: "Member to preview",
+      type: 6,
+      required: true,
+    }],
+  },
+  {
+    name: "community-nudge-preview",
+    description: "Preview the community re-engagement DM for one member",
+    type: 1,
+    options: [{
+      name: "member",
+      description: "Member to preview",
+      type: 6,
+      required: true,
+    }],
+  },
+  {
+    name: "community-nudge-send",
+    description: "Manually send the community re-engagement DM to one member",
+    type: 1,
+    options: [{
+      name: "member",
+      description: "Member to message",
       type: 6,
       required: true,
     }],
@@ -129,8 +156,9 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "task-stage-scan", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "community-nudge-preview", "community-nudge-send", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
+    customId.startsWith("actv47:nudge:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
     customId.startsWith("teamapp:v42:") ||
@@ -140,7 +168,8 @@ export async function handleV40Interaction(request, env, ctx) {
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
     return new Response("Invalid request signature", { status: 401 });
   }
-  if (String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
+  const isCommunityNudgeDm = customId.startsWith("actv47:nudge:");
+  if (!isCommunityNudgeDm && String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
     return ephemeralMessage("This interaction only works in the Slayerkey Discord server.");
   }
 
@@ -213,6 +242,38 @@ export async function handleV40Interaction(request, env, ctx) {
     return deferredEphemeral();
   }
 
+  if (command === "task-stage-scan") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can scan task stages.");
+    ctx.waitUntil(
+      stub.scanTaskStagesV47()
+        .then((result) => editOriginalInteraction(interaction, env, {
+          content: `Task-stage scan complete. **${Number(result?.scanned || 0)}** task threads checked; **${Number(result?.matched || 0)}** had recognized task tags. Weekly Digest and member roadmaps can now show the highest tagged task stage.`,
+        }))
+        .catch((error) => failInteraction(interaction, env, "Task-stage scan failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
+
+  if (command === "community-nudge-preview" || command === "community-nudge-send") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can use community nudges.");
+    const targetId = String(getOption(interaction, "member") || "");
+    if (!targetId) return ephemeralMessage("Choose a member.");
+
+    if (command === "community-nudge-preview") {
+      ctx.waitUntil(
+        previewCommunityNudge(interaction, targetId, env, stub)
+          .catch((error) => failInteraction(interaction, env, "Community nudge preview failed", error)),
+      );
+      return deferredEphemeral();
+    }
+
+    ctx.waitUntil(
+      sendCommunityNudge(interaction, targetId, env, stub)
+        .catch((error) => failInteraction(interaction, env, "Community nudge send failed", error)),
+    );
+    return deferredEphemeral();
+  }
 
   if (command === "activation-checkin-preview") {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can use this command.");
@@ -275,6 +336,38 @@ export async function handleV40Interaction(request, env, ctx) {
   if (customId === "teamapp:v43:organizer") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to apply as a Premier Team Organizer.");
     return organizerApplicationModal();
+  }
+
+  if (customId.startsWith("actv47:nudge:")) {
+    const response = customId.split(":").pop();
+    const actionMap = {
+      improving: "community_still_improving",
+      notplaying: "snooze",
+      stuck: "stuck",
+      break: "community_break",
+    };
+    const action = actionMap[response];
+    if (!action) return ephemeralMessage("That response is not recognized.");
+
+    const result = await stub.applyActivationIntervention(userId, action, String(interaction.id || ""));
+    if (!result?.ok) return ephemeralMessage(result?.message || "I couldn't save that response.");
+
+    const reply = {
+      improving: "Got it — you're still working on it. Open the Dojo roadmap and pick up the next step when you're ready.",
+      notplaying: "Got it. I'll treat this as a play-time issue rather than an improvement issue for now.",
+      stuck: "Got it. You're marked as stuck so this can surface for coaching follow-up. Bring one specific problem to Weekly Group Coaching.",
+      break: "Thanks for letting us know. I'll record that you're taking a break so this isn't mistaken for being stuck.",
+    }[response];
+
+    return Response.json({
+      type: 7,
+      data: {
+        content: reply,
+        embeds: [],
+        components: [],
+        allowed_mentions: { parse: [] },
+      },
+    });
   }
 
   if (customId.startsWith("actv40:mark-sent:")) {
@@ -519,7 +612,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.3").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.5").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -542,9 +635,9 @@ export async function ensureV40CommandsOnce(env, stub) {
       }
     }
 
-    await stub.completeV40CommandRegistration("activation-v40.3");
+    await stub.completeV40CommandRegistration("activation-v40.5");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.3", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.5", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -692,10 +785,13 @@ export async function runWeeklyDigestScheduler(env, stub) {
 }
 
 export async function getActivationV40Snapshot(gateway) {
-  const [stored, tenures, interventionRows] = await Promise.all([
+  const [stored, tenures, interventionRows, taskStageRows] = await Promise.all([
     gateway.ctx.storage.list({ prefix: MEMBER_PREFIX }),
     gateway.listTenureRecords?.().catch(() => []),
     gateway.ctx.storage.list({ prefix: INTERVENTION_PREFIX }),
+    typeof gateway.getTaskStageMapV47 === "function"
+      ? gateway.getTaskStageMapV47().catch(() => ({}))
+      : Promise.resolve({}),
   ]);
   const tenureById = new Map((Array.isArray(tenures) ? tenures : []).map((item) => [String(item?.discord_user_id || ""), item]));
   const records = [];
@@ -715,7 +811,7 @@ export async function getActivationV40Snapshot(gateway) {
   for (const [key, value] of interventionRows.entries()) {
     interventions[String(key).slice(INTERVENTION_PREFIX.length)] = value;
   }
-  return { records, interventions };
+  return { records, interventions, taskStages: taskStageRows || {} };
 }
 
 export async function hydrateActivationIdentities(gateway, identities) {
@@ -949,6 +1045,101 @@ async function runV40Queue(interaction, env, stub) {
   await editOriginalInteraction(interaction, env, payload);
 }
 
+async function previewCommunityNudge(interaction, targetId, env, stub) {
+  const { name, config } = await resolveNudgeMember(targetId, env, stub);
+  const payload = buildCommunityNudgePayload(name, env, config, { disabled: true });
+  await editOriginalInteraction(interaction, env, {
+    content: `**Community Nudge Preview — ${name}**\n_No DM was sent._`,
+    embeds: payload.embeds,
+    components: payload.components,
+  });
+}
+
+async function sendCommunityNudge(interaction, targetId, env, stub) {
+  const { name, config } = await resolveNudgeMember(targetId, env, stub);
+  const dm = await discordJson(`${DISCORD_API}/users/@me/channels`, env, {
+    method: "POST",
+    body: JSON.stringify({ recipient_id: String(targetId) }),
+  });
+  if (!dm?.id) throw new Error("Discord did not return a DM channel.");
+
+  const payload = buildCommunityNudgePayload(name, env, config, { disabled: false });
+  await discordJson(`${DISCORD_API}/channels/${dm.id}/messages`, env, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  await stub.applyActivationIntervention(targetId, "community_nudge_sent", String(interaction.id || ""));
+  await editOriginalInteraction(interaction, env, {
+    content: `Community nudge sent to **${escapeDiscord(name)}**. Their button response will be saved to the activation intervention state.`,
+    embeds: [],
+    components: [],
+  });
+}
+
+async function resolveNudgeMember(targetId, env, stub) {
+  const [member, snapshot, config] = await Promise.all([
+    discordJson(`${DISCORD_API}/guilds/${env.DISCORD_GUILD_ID}/members/${targetId}`, env).catch(() => null),
+    stub.getActivationV40Snapshot().catch(() => null),
+    typeof stub.getRoadmapV41Config === "function"
+      ? stub.getRoadmapV41Config().catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const stored = (snapshot?.records || []).find((record) => String(record?.discord_user_id || "") === String(targetId || ""));
+  const currentIdentity = member ? identityFromGuildMember(member) : null;
+  const name = resolveDisplayName(targetId, currentIdentity, stored);
+  return { name, config };
+}
+
+export function buildCommunityNudgePayload(name, env, config, { disabled = false } = {}) {
+  const safeName = escapeDiscord(name || "there");
+  const description = [
+    `Hey **${safeName}** — quick check-in from Slayerkey's Training Dojo 👋`,
+    "",
+    "You joined because you wanted to improve and get closer to your goal rank. It looks like your roadmap may have stalled before you really got into the community.",
+    "",
+    "A big part of the Dojo is having other players around you who are working on the same thing — not just grinding alone.",
+    "",
+    "**Are you still looking to improve right now?**",
+  ].join("\n");
+
+  const rows = [{
+    type: 1,
+    components: [
+      { type: 2, style: 3, custom_id: "actv47:nudge:improving", label: "Still improving", disabled },
+      { type: 2, style: 2, custom_id: "actv47:nudge:notplaying", label: "Haven't played much", disabled },
+      { type: 2, style: 1, custom_id: "actv47:nudge:stuck", label: "I'm stuck", disabled },
+      { type: 2, style: 2, custom_id: "actv47:nudge:break", label: "Taking a break", disabled },
+    ],
+  }];
+
+  const guildId = String(config?.guild_id || env?.DISCORD_GUILD_ID || "");
+  const botsId = String(config?.channels?.bots || "");
+  if (guildId && botsId) {
+    rows.push({
+      type: 1,
+      components: [{
+        type: 2,
+        style: 5,
+        url: `https://discord.com/channels/${guildId}/${botsId}`,
+        label: "View My Roadmap",
+        emoji: { name: "🧭" },
+      }],
+    });
+  }
+
+  return {
+    content: "",
+    embeds: [{
+      title: "🧭 Quick Dojo Check-In",
+      description,
+      footer: { text: "Your response only helps us understand what kind of support would actually be useful." },
+    }],
+    components: rows,
+    allowed_mentions: { parse: [] },
+  };
+}
+
 async function runCheckinPreview(interaction, targetId, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
   const target = runtime.members.find((member) => String(member?.user?.id || "") === String(targetId || ""));
@@ -993,6 +1184,7 @@ async function buildV40Runtime(env, stub) {
     currentMembers: members,
     totals: totals || {},
     interventions: snapshot?.interventions || {},
+    taskStages: snapshot?.taskStages || {},
     now: new Date(),
   });
   return { members, snapshot, totals, model };
@@ -1714,6 +1906,7 @@ function safeError(error) {
 
 export const __test = Object.freeze({
   buildWeeklyDigestPayload,
+  buildCommunityNudgePayload,
   buildCheckinPrompt,
   buildProposedDm,
   checkinButtons,

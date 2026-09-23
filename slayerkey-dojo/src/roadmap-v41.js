@@ -288,7 +288,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
     test_mode: Boolean(merged?.roadmap_test_record),
     cohort_source: roleFallback ? "discord_dojo_role" : "stored_membership",
     discord_user_id: userId,
-    activation: deriveMember(merged),
+    activation: deriveRoadmapActivation(merged, taskStage),
     manual: {
       completed: Array.isArray(manual?.completed)
         ? manual.completed.filter((value) => MANUAL_VALUES.has(String(value))).map(String)
@@ -300,6 +300,35 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
       : null,
     task_stage: taskStage || null,
     config: config || null,
+  };
+}
+
+function deriveRoadmapActivation(record, taskStage = null) {
+  const derived = deriveMember(record);
+  const hasTaskSubmission = Number(taskStage?.stage || 0) > 0;
+
+  // If we know the true membership start date, preserve the strict post-anchor
+  // activation metrics. A tagged task is direct evidence of a task submission.
+  if (derived.anchor_valid) {
+    return {
+      ...derived,
+      first_training_post: derived.first_training_post || hasTaskSubmission,
+      first_general_message: derived.first_general_message || Boolean(record?.first_community_message_at),
+    };
+  }
+
+  // Older members can have real Discord history without a recoverable Whop
+  // start date. Use separately stored historical evidence for roadmap UX only;
+  // these observations never become timed activation metrics.
+  return {
+    ...derived,
+    introduction_posted: derived.introduction_posted || derived.introduction_observed,
+    replied_to_two_members: derived.replied_to_two_members || derived.replied_to_two_members_observed,
+    first_training_post: derived.first_training_post || derived.training_post_observed || hasTaskSubmission,
+    first_general_message: derived.first_general_message || derived.community_participated_observed || derived.general_message_observed,
+    goal_posted: derived.goal_posted || derived.goal_observed,
+    first_win_posted: derived.first_win_posted || derived.win_observed,
+    first_win_within_7_days: false,
   };
 }
 
@@ -813,4 +842,5 @@ export const __test = Object.freeze({
   normalizeChannelName,
   resolveRoadmapChannels,
   roadmapChannelMatchScore,
+  deriveRoadmapActivation,
 });

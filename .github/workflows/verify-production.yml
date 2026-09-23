@@ -1,32 +1,29 @@
-name: Verify Dojo Production Runtime
+name: Verify Dojo Payment Proof Runtime
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - 'slayerkey-dojo/**'
-      - '.github/workflows/verify-production.yml'
-  workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  production-health:
+  payment-proof:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 2
     steps:
-      - name: Verify production Worker health
+      - name: Probe live identity bridge payment verification
         shell: bash
-        env:
-          HEALTH_URL: https://slayerkey-dojo.mystd.workers.dev/health
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 36); do
-            body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
-            if [[ -n "$body" ]] && HEALTH_JSON="$body" node -e 'const body=JSON.parse(process.env.HEALTH_JSON||"{}"); const roadmap=body?.discord?.roadmap?.version; const journey=body?.discord?.customer_journey||{}; if(roadmap!=="v41"||journey.version!=="posthog-v1"||journey.posthog_configured!==true||journey.identity_bridge_configured!==true) process.exit(1); console.log(JSON.stringify({roadmap_version:roadmap,customer_journey_version:journey.version,posthog_configured:journey.posthog_configured,identity_bridge_configured:journey.identity_bridge_configured,delivery:journey.delivery||null}));'
-            then
-              exit 0
-            fi
-            echo "Production runtime not ready yet (attempt $attempt/36)."
-            sleep 10
-          done
-          echo "Production Worker did not expose the expected journey runtime with required secrets configured."
-          exit 1
+          body='{"whop_user_id":"user_runtime_probe","posthog_distinct_id":"runtime_probe","payment_id":"pay_AAAAAAAAAAAAAA"}'
+          response_file="$(mktemp)"
+          status="$(curl -sS --max-time 15 -o "$response_file" -w '%{http_code}'             -X POST 'https://slayerkey-dojo.mystd.workers.dev/internal/customer-identity'             -H 'Content-Type: application/json'             --data "$body")"
+          response="$(cat "$response_file")"
+          echo "HTTP $status"
+          echo "$response"
+          if [[ "$status" != "502" ]]; then
+            echo "Expected the live Worker to attempt Whop payment verification and fail safely with 502 for a fake payment."
+            exit 1
+          fi
+          if [[ "$response" != *"Whop payment verification"* ]]; then
+            echo "Live Worker did not return the payment-proof verification path."
+            exit 1
+          fi

@@ -31,6 +31,7 @@ const MANUAL_VALUES = new Set(MANUAL_ITEMS.map((item) => item.value));
 export const ROADMAP_COMMANDS = Object.freeze([
   { name: "roadmap", description: "Open your personal Dojo roadmap progress", type: 1 },
   { name: "roadmap-setup", description: "Post or refresh the persistent Dojo roadmap card in this channel", type: 1 },
+  { name: "roadmap-preview", description: "Preview every roadmap link before publishing", type: 1 },
 ]);
 
 const CHANNEL_ALIASES = Object.freeze({
@@ -53,7 +54,11 @@ export async function handleRoadmapV41Interaction(request, env) {
 
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
-  const isRoadmap = command === "roadmap" || command === "roadmap-setup" || customId.startsWith("roadmap:v41:");
+  const isRoadmap =
+    command === "roadmap" ||
+    command === "roadmap-setup" ||
+    command === "roadmap-preview" ||
+    customId.startsWith("roadmap:v41:");
   if (!isRoadmap) return null;
 
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
@@ -74,6 +79,22 @@ export async function handleRoadmapV41Interaction(request, env) {
       return ephemeralMessage(result.message);
     } catch (error) {
       return ephemeralMessage(`Roadmap setup failed: ${safeError(error)}`);
+    }
+  }
+
+  if (command === "roadmap-preview") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can preview roadmap links.");
+    try {
+      return Response.json({
+        type: 4,
+        data: {
+          ...(await buildRoadmapPreview(env)),
+          flags: EPHEMERAL,
+          allowed_mentions: { parse: [] },
+        },
+      });
+    } catch (error) {
+      return ephemeralMessage(`Roadmap preview failed: ${safeError(error)}`);
     }
   }
 
@@ -117,7 +138,7 @@ export async function handleRoadmapV41Interaction(request, env) {
 
 export async function ensureRoadmapV41CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41").catch(() => false);
+  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41.1").catch(() => false);
   if (!claimed) return;
 
   try {
@@ -132,9 +153,9 @@ export async function ensureRoadmapV41CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeRoadmapV41CommandRegistration("roadmap-v41");
+    await stub.completeRoadmapV41CommandRegistration("roadmap-v41.1");
   } catch (error) {
-    await stub.failRoadmapV41CommandRegistration("roadmap-v41", safeError(error)).catch(() => {});
+    await stub.failRoadmapV41CommandRegistration("roadmap-v41.1", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -294,7 +315,12 @@ async function setupRoadmapCard(interaction, env, stub) {
 }
 
 export function resolveRoadmapChannels(channels, guildId) {
-  const list = Array.isArray(channels) ? channels : [];
+  const list = (Array.isArray(channels) ? channels : [])
+    .filter((channel) => [0, 5, 15, 16].includes(Number(channel?.type)));
+
+  // Activation destinations are authoritative for the channels we already track.
+  // Dynamic discovery fills in the remaining roadmap-only destinations and may
+  // confirm tracked channels, but it should never prefer old/archive copies.
   const resolved = {
     introductions: ACTIVATION_DESTINATIONS.introductions,
     general: ACTIVATION_DESTINATIONS.general,
@@ -304,19 +330,105 @@ export function resolveRoadmapChannels(channels, guildId) {
   };
 
   for (const [key, aliases] of Object.entries(CHANNEL_ALIASES)) {
-    const match = list.find((channel) => {
-      if (![0, 5, 15, 16].includes(Number(channel?.type))) return false;
-      const normalized = normalizeChannelName(channel?.name);
-      return aliases.some((alias) => {
-        const target = normalizeChannelName(alias);
-        return normalized === target || normalized.endsWith(target);
-      });
-    });
-    if (match?.id) resolved[key] = String(match.id);
+    const ranked = list
+      .map((channel) => ({
+        channel,
+        score: roadmapChannelMatchScore(channel?.name, aliases),
+      }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || String(a.channel?.id || "").localeCompare(String(b.channel?.id || "")));
+
+    if (ranked[0]?.channel?.id) resolved[key] = String(ranked[0].channel.id);
   }
 
   const unresolved = Object.keys(CHANNEL_ALIASES).filter((key) => !resolved[key]);
   return { channels: resolved, unresolved, guild_id: String(guildId || "") };
+}
+
+export function roadmapChannelMatchScore(name, aliases) {
+  const normalized = normalizeChannelName(name);
+  if (!normalized) return 0;
+
+  // Never route new members into archived/legacy copies such as #old-introductions.
+  if (/^(old|archive|archived|legacy|deprecated)/.test(normalized)) return 0;
+
+  let best = 0;
+  for (const alias of aliases || []) {
+    const target = normalizeChannelName(alias);
+    if (!target) continue;
+    if (normalized === target) best = Math.max(best, 100);
+    else if (normalized.endsWith(target)) best = Math.max(best, 40);
+    else if (normalized.includes(target)) best = Math.max(best, 20);
+  }
+  return best;
+}
+
+async function buildRoadmapPreview(env) {
+  const guildId = String(env.DISCORD_GUILD_ID || "");
+  const channels = await discordJson(`${DISCORD_API}/guilds/${guildId}/channels`, env);
+  const resolved = resolveRoadmapChannels(channels, guildId);
+
+  const channelRows = [
+    ["Start Here / Full Roadmap", "start_here"],
+    ["Introductions", "introductions"],
+    ["Tasks", "tasks"],
+    ["Bots", "bots"],
+    ["General", "general"],
+    ["Goals", "goals"],
+    ["Wins", "wins"],
+    ["Premier Info", "premier_info"],
+    ["Clips", "clips"],
+    ["Community Help", "community_help"],
+  ];
+
+  const fields = channelRows.map(([label, key]) => ({
+    name: label,
+    value: resolved.channels?.[key]
+      ? `<#${resolved.channels[key]}>  ·  \`${resolved.channels[key]}\``
+      : "❌ Not found",
+    inline: true,
+  }));
+
+  fields.push(
+    {
+      name: "👋 Onboarding Video",
+      value: `[Open onboarding video](<${ONBOARDING_URL}>)`,
+      inline: false,
+    },
+    {
+      name: "🧪 7-Day Fundamentals",
+      value: `[Open 7-Day Fundamentals](<${FUNDAMENTALS_URL}>)`,
+      inline: false,
+    },
+    {
+      name: "New-member task order",
+      value: [
+        "1. Introduce yourself",
+        "2. Reply to two members",
+        "3. Post first training task",
+        "4. Link Riot",
+        "5. Join a conversation",
+        "6. Post goal",
+        "7. 🏆 Post first win",
+      ].join("\n"),
+      inline: false,
+    },
+  );
+
+  return {
+    content: "",
+    embeds: [{
+      title: "🧭 Roadmap Link Preview",
+      description: resolved.unresolved.length
+        ? `Check every destination below before publishing. Missing: **${resolved.unresolved.join(", ")}**.`
+        : "Check every destination below. **Nothing is published or changed by this preview.**",
+      fields,
+      footer: {
+        text: "If these are correct, run /roadmap-setup in the roadmap channel to save and publish them.",
+      },
+    }],
+    components: [],
+  };
 }
 
 export function buildRoadmapCard(config = {}) {
@@ -603,4 +715,5 @@ export const __test = Object.freeze({
   formatRoadmapView,
   normalizeChannelName,
   resolveRoadmapChannels,
+  roadmapChannelMatchScore,
 });

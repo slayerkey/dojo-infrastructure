@@ -45,19 +45,19 @@ export async function recordLiveActivationMessage(gateway, message) {
 
   record = mergeTenureIntoRecord(record, userId, tenure);
   record = mergeIdentityIntoRecord(record, identityFromMessage(message));
-  if (!record.activation_started_at) {
-    record.unknown_anchor_activity_seen_at = earliestIso(record.unknown_anchor_activity_seen_at, message.timestamp);
-    record.updated_at = new Date().toISOString();
-    await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, record);
-    return { recorded: false, reason: "unknown_anchor" };
-  }
-
   const next = applyActivationMessage(record, {
     message,
     destinationKey: context.destination_key,
     threadOwnerId: context.owner_id || null,
     isThread: Boolean(context.parent_id),
   });
+  if (!next.activation_started_at) {
+    next.unknown_anchor_activity_seen_at = earliestIso(next.unknown_anchor_activity_seen_at, message.timestamp);
+    next.updated_at = new Date().toISOString();
+    await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, next);
+    return { recorded: false, reason: "unknown_anchor", evidence_recorded: true };
+  }
+
   await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, next);
   return { recorded: true, destination: context.destination_key };
 }

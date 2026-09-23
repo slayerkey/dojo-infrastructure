@@ -1,5 +1,12 @@
 import legacy, { DiscordGateway as DiscordGatewayV40 } from "./index-v40.js";
 import {
+  getTaskStageMapV47,
+  getTaskStageV47,
+  observeTaskThreadV47,
+  observeV47Message,
+  scanTaskStagesV47,
+} from "./community-activation-v47.js";
+import {
   handleCustomerIdentityBridge,
   syncActivationPosthogBatch,
 } from "./posthog-journey.js";
@@ -48,6 +55,7 @@ export default {
             "replied_to_two_members",
             "first_training_post",
             "first_general_message",
+            "community_participated",
             "goal_posted",
             "riot_linked",
             "first_win_posted",
@@ -57,11 +65,11 @@ export default {
         body.discord.roadmap = {
           version: "v41",
           persistent_card: true,
-          personal_ephemeral_progress: true,
+          progress_visibility: "configurable; defaults public for current testing",
           live_activation_checks: true,
           manual_checklist_items: true,
           new_polling_cron: false,
-          commands: ["/roadmap", "/roadmap-setup", "/roadmap-preview"],
+          commands: ["/roadmap", "/roadmap-setup", "/roadmap-preview", "/roadmap-visibility"],
         };
         return Response.json(body, { status: response.status });
       } catch {
@@ -93,6 +101,39 @@ export default {
 };
 
 export class DiscordGateway extends DiscordGatewayV40 {
+  async handleGatewayMessage(raw) {
+    let payload = null;
+    try {
+      payload = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
+    } catch {}
+
+    try {
+      if (
+        payload?.op === 0 &&
+        payload?.t === "MESSAGE_CREATE" &&
+        String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "") &&
+        !payload?.d?.author?.bot
+      ) {
+        const roles = Array.isArray(payload?.d?.member?.roles) ? payload.d.member.roles.map(String) : [];
+        if (roles.includes(String(this.env.DISCORD_DOJO_ROLE_ID || ""))) {
+          await observeV47Message(this, payload.d);
+        }
+      }
+
+      if (
+        payload?.op === 0 &&
+        (payload?.t === "THREAD_CREATE" || payload?.t === "THREAD_UPDATE") &&
+        String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "")
+      ) {
+        await observeTaskThreadV47(this, payload.d);
+      }
+    } catch (error) {
+      console.error("v47 community/task tracking failed without blocking legacy handling:", error);
+    }
+
+    return super.handleGatewayMessage(raw);
+  }
+
   async syncActivationPosthogBatch() {
     return syncActivationPosthogBatch(this);
   }
@@ -123,5 +164,17 @@ export class DiscordGateway extends DiscordGatewayV40 {
 
   async getRoadmapV41Config() {
     return getRoadmapV41Config(this);
+  }
+
+  async scanTaskStagesV47() {
+    return scanTaskStagesV47(this);
+  }
+
+  async getTaskStageMapV47() {
+    return getTaskStageMapV47(this);
+  }
+
+  async getTaskStageV47(discordUserId) {
+    return getTaskStageV47(this, discordUserId);
   }
 }

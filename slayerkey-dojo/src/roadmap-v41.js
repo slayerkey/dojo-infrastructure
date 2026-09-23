@@ -277,14 +277,29 @@ async function setupRoadmapCard(interaction, env, stub) {
   const resolved = resolveRoadmapChannels(channels, env.DISCORD_GUILD_ID);
   const previous = await stub.getRoadmapV41Config().catch(() => null);
 
+  const placements = {
+    ...(previous?.placements || {}),
+  };
+  // Backward-compat: preserve the one legacy placement if it predates multi-placement storage.
+  if (previous?.channel_id && previous?.message_id && !placements[String(previous.channel_id)]) {
+    placements[String(previous.channel_id)] = {
+      channel_id: String(previous.channel_id),
+      message_id: String(previous.message_id),
+      configured_at: previous.configured_at || previous.updated_at || null,
+    };
+  }
+
+  const existingPlacement = placements[targetChannelId] || null;
   const config = {
+    ...(previous || {}),
     channel_id: targetChannelId,
-    message_id: previous?.channel_id === targetChannelId ? previous?.message_id || null : null,
+    message_id: existingPlacement?.message_id || null,
     channels: resolved.channels,
     unresolved: resolved.unresolved,
     guild_id: String(env.DISCORD_GUILD_ID || ""),
     configured_by: interactionUserId(interaction),
     configured_at: new Date().toISOString(),
+    placements,
   };
 
   const payload = buildRoadmapCard(config);
@@ -305,11 +320,17 @@ async function setupRoadmapCard(interaction, env, stub) {
   }
 
   config.message_id = String(message?.id || "");
+  config.placements[targetChannelId] = {
+    channel_id: targetChannelId,
+    message_id: config.message_id,
+    configured_at: config.configured_at,
+  };
   await stub.setRoadmapV41Config(config);
 
   const missing = resolved.unresolved.length ? ` Missing channel links: ${resolved.unresolved.join(", ")}.` : "";
+  const placementCount = Object.keys(config.placements || {}).length;
   return {
-    message: `Roadmap card is live in <#${targetChannelId}>. Members can click **View My Progress** for their private checklist.${missing}`,
+    message: `Roadmap launcher is live in <#${targetChannelId}>. **${placementCount}** public roadmap placement${placementCount === 1 ? "" : "s"} now use the same member progress.${missing}`,
     config,
   };
 }

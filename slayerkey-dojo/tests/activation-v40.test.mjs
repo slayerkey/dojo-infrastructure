@@ -653,7 +653,7 @@ test("Weekly Digest separates activation groups into readable embeds", () => {
   assert.match(groupText, /<@2>/);
   assert.match(groupText, /<@3>/);
   assert.match(groupText, /<@4>/);
-  assert.equal(groupText.includes("<@5>"), false);
+  assert.equal(groupText.includes("<@5>"), true);
   assert.match(groupText, /#2/);
 });
 

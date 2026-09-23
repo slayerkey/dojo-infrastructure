@@ -134,8 +134,14 @@ export const V40_COMMANDS = Object.freeze([
   },
   {
     name: "teamapply-setup",
-    description: "Set this private channel as the Premier application inbox",
+    description: "Set a private channel as the Premier application inbox",
     type: 1,
+    options: [{
+      name: "channel",
+      description: "Private staff channel to receive applications; defaults to this channel",
+      type: 7,
+      required: false,
+    }],
   },
   {
     name: "premier-buttons-setup",
@@ -338,6 +344,24 @@ export async function handleV40Interaction(request, env, ctx) {
     return organizerApplicationModal();
   }
 
+  if (customId === "actv47:nudge:details") {
+    return communityNudgeDetailsModal();
+  }
+
+  if (customId === "actv47:nudge:details-submit") {
+    const note = modalValue(interaction, "community_note");
+    if (!note) return ephemeralMessage("Tell us a little about what's going on.");
+    const result = await stub.recordCommunityNudgeDetails(userId, note, String(interaction.id || ""));
+    if (!result?.ok) return ephemeralMessage(result?.message || "I couldn't save that response.");
+    return Response.json({
+      type: 4,
+      data: {
+        content: "Thanks — that helps. Your response was saved so Slayerkey can understand what support would actually be useful.",
+        allowed_mentions: { parse: [] },
+      },
+    });
+  }
+
   if (customId.startsWith("actv47:nudge:")) {
     const response = customId.split(":").pop();
     const actionMap = {
@@ -443,7 +467,6 @@ export async function handleV40Interaction(request, env, ctx) {
         String(interaction.id || ""),
         {
           region: modalValue(interaction, "region"),
-          riot_or_tracker: modalValue(interaction, "riot_or_tracker"),
           availability: modalValue(interaction, "availability"),
           why_organize: modalValue(interaction, "why_organize"),
           experience: modalValue(interaction, "experience"),
@@ -612,7 +635,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.5").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.6").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -635,9 +658,9 @@ export async function ensureV40CommandsOnce(env, stub) {
       }
     }
 
-    await stub.completeV40CommandRegistration("activation-v40.5");
+    await stub.completeV40CommandRegistration("activation-v40.6");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.5", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.6", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -844,6 +867,23 @@ export async function applyActivationIntervention(gateway, discordUserId, action
   return { ok: true, ...result };
 }
 
+export async function recordCommunityNudgeDetails(gateway, discordUserId, note, interactionId) {
+  const userId = String(discordUserId || "");
+  const text = String(note || "").trim().slice(0, 700);
+  if (!userId || !text) return { ok: false, message: "A response is required." };
+
+  const key = `${INTERVENTION_PREFIX}${userId}`;
+  const previous = await gateway.ctx.storage.get(key);
+  if (previous?.last_interaction_id === String(interactionId || "")) {
+    return { ok: true, duplicate: true, state: previous };
+  }
+
+  const result = applyInterventionAction(previous, "community_details", new Date().toISOString(), interactionId);
+  result.state.community_note = text;
+  await gateway.ctx.storage.put(key, result.state);
+  return { ok: true, duplicate: false, state: result.state };
+}
+
 export async function recordActivationCheckinWin(gateway, discordUserId, timestamp, interactionId, identity) {
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
@@ -974,22 +1014,19 @@ export async function completeOrganizerApplication(gateway, discordUserId, inter
   }
 
   const region = String(fields?.region || "").trim().toUpperCase();
-  const riotOrTracker = String(fields?.riot_or_tracker || "").trim();
   const availability = String(fields?.availability || "").trim();
   const whyOrganize = String(fields?.why_organize || "").trim();
   const experience = String(fields?.experience || "").trim() || null;
 
   if (!["NA", "EU"].includes(region)) throw new Error("Region must be NA or EU.");
-  if (!riotOrTracker || riotOrTracker.length > 500) throw new Error("Riot ID or Tracker is required.");
   if (!availability || availability.length > 400) throw new Error("Availability is required.");
-  if (!whyOrganize || whyOrganize.length > 700) throw new Error("Why you want to organize is required.");
+  if (!whyOrganize || whyOrganize.length > 700) throw new Error("Why you're interested is required.");
 
   const application = mergeIdentityIntoRecord({
     version: 1,
     application_type: "organizer",
     discord_user_id: userId,
     region,
-    riot_or_tracker: riotOrTracker,
     availability,
     why_organize: whyOrganize,
     experience,
@@ -1110,6 +1147,7 @@ export function buildCommunityNudgePayload(name, env, config, { disabled = false
       { type: 2, style: 2, custom_id: "actv47:nudge:notplaying", label: "Haven't played much", disabled },
       { type: 2, style: 1, custom_id: "actv47:nudge:stuck", label: "I'm stuck", disabled },
       { type: 2, style: 2, custom_id: "actv47:nudge:break", label: "Taking a break", disabled },
+      { type: 2, style: 1, custom_id: "actv47:nudge:details", label: "Tell me what's going on", disabled },
     ],
   }];
 
@@ -1257,25 +1295,47 @@ export async function getPremierPublicCardConfig(gateway) {
 }
 
 async function setupTeamApplicationChannel(interaction, env, stub) {
-  const channelId = String(interaction?.channel_id || "");
-  const channel = await discordJson(`${DISCORD_API}/channels/${channelId}`, env);
+  const requested = String(getOption(interaction, "channel") || interaction?.channel_id || "");
+  if (!requested) throw new Error("Missing application inbox channel.");
+
+  let channel;
+  try {
+    channel = await discordJson(`${DISCORD_API}/channels/${requested}`, env);
+  } catch (error) {
+    if (/Discord API 403/.test(String(error?.message || error))) {
+      await editOriginalInteraction(interaction, env, {
+        content: [
+          `I can't configure <#${requested}> yet because **Dojo Bot cannot access that channel**.`,
+          "",
+          "Give Dojo Bot **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** on that channel (or its category), then run:",
+          `**/teamapply-setup channel:<#${requested}>**`,
+          "",
+          "The old application inbox stays unchanged until the new channel passes this access check.",
+        ].join("\n"),
+      });
+      return;
+    }
+    throw error;
+  }
+
   const parent = channel?.parent_id
     ? await discordJson(`${DISCORD_API}/channels/${channel.parent_id}`, env).catch(() => null)
     : null;
   if (!isPrivateTextChannel(channel, env.DISCORD_GUILD_ID, parent)) {
     await editOriginalInteraction(interaction, env, {
-      content: "I did not configure this channel. Team applications must go to a private text channel whose @everyone role cannot View Channel (directly or through its parent category).",
+      content: `I did not configure <#${requested}>. Team applications must go to a **private text channel** where @everyone cannot View Channel.`,
     });
     return;
   }
+
   await stub.setTeamApplicationConfig({
-    channel_id: channelId,
+    channel_id: requested,
     channel_name: String(channel?.name || ""),
     configured_by: interactionUserId(interaction),
     configured_at: new Date().toISOString(),
   });
   await editOriginalInteraction(interaction, env, {
-    content: `Premier team applications will be delivered privately to **#${channel?.name || "this-channel"}**. Applicants can now use **/teamapply**.`,
+    content: `Premier team and organizer applications will now be delivered privately to **#${channel?.name || "this-channel"}** (<#${requested}>).`,
   });
 }
 
@@ -1401,6 +1461,27 @@ function checkinButtons(disabled) {
   }];
 }
 
+function communityNudgeDetailsModal() {
+  return Response.json({
+    type: 9,
+    data: {
+      custom_id: "actv47:nudge:details-submit",
+      title: "Tell Us What's Going On",
+      components: [
+        textInput(
+          "community_note",
+          "What's getting in the way right now?",
+          true,
+          2,
+          3,
+          700,
+          "Haven't been playing, not sure what to work on, busy, stuck, or anything else.",
+        ),
+      ],
+    },
+  });
+}
+
 function firstWinModal() {
   return Response.json({
     type: 9,
@@ -1440,10 +1521,9 @@ function organizerApplicationModal() {
       title: "🧑‍✈️ Team Organizer Application",
       components: [
         textInput("region", "Region (NA or EU)", true, 1, 2, 8, "NA or EU"),
-        textInput("riot_or_tracker", "Riot ID or Tracker", true, 1, 3, 500, "Name#TAG or tracker.gg/..."),
         textInput("availability", "Availability + timezone", true, 2, 4, 400, "When are you usually available?"),
-        textInput("why_organize", "Why do you want to organize?", true, 2, 10, 700, "Keep it short — what makes you a good fit?"),
-        textInput("experience", "Relevant experience (optional)", false, 2, 0, 500, "Teams, scheduling, leadership, Discord, etc."),
+        textInput("why_organize", "Why are you interested?", true, 2, 10, 700, "What interests you about organizing a Premier team?"),
+        textInput("experience", "What makes you a good fit? (optional)", false, 2, 0, 500, "Teams, scheduling, leadership, Discord, or anything else."),
       ],
     },
   });
@@ -1611,11 +1691,10 @@ function buildOrganizerApplicationEmbed(application) {
     { name: "Region", value: `${regionFlag(application.region)} ${regionName(application.region)}`, inline: true },
     { name: "Submitted", value: relativeDiscordTime(application.submitted_at), inline: true },
     { name: "Member", value: `<@${application.discord_user_id}>\n${escapeDiscord(displayName)}\n\`${application.discord_user_id}\``, inline: false },
-    { name: "Riot ID / Tracker", value: formatRiotIdentity(application.riot_or_tracker), inline: false },
     { name: "Availability", value: escapeDiscord(application.availability), inline: false },
-    { name: "Why Organize?", value: escapeDiscord(application.why_organize), inline: false },
+    { name: "Why They're Interested", value: escapeDiscord(application.why_organize), inline: false },
   ];
-  if (application.experience) fields.push({ name: "Relevant Experience", value: escapeDiscord(application.experience), inline: false });
+  if (application.experience) fields.push({ name: "Why They're a Good Fit", value: escapeDiscord(application.experience), inline: false });
   if (application.decision_reason) fields.push({ name: "Decline Reason", value: escapeDiscord(application.decision_reason), inline: false });
 
   return {

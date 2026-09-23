@@ -129,13 +129,10 @@ export function buildActivationV40Model({
     // historical evidence for factual UX only.
     const intro = anchor ? timedIntro : earliestObserved(record.observed_introduction_at, record.introduction_at);
     const replies = anchor ? timedReplies : earliestObserved(record.observed_replied_to_two_members_at, record.replied_to_two_members_at);
+    const taskSubmissionObserved = Number(taskStage?.stage || 0) > 0;
     const training = anchor
-      ? (timedTraining || (Number(taskStage?.stage || 0) > 0 ? (taskStage.observed_at || record.first_training_post_at || new Date(safeNowMs).toISOString()) : null))
-      : earliestObserved(
-          record.observed_training_post_at,
-          record.first_training_post_at,
-          Number(taskStage?.stage || 0) > 0 ? (taskStage.observed_at || new Date(safeNowMs).toISOString()) : null,
-        );
+      ? timedTraining
+      : earliestObserved(record.observed_training_post_at, record.first_training_post_at);
     const general = anchor ? timedGeneral : earliestObserved(record.observed_general_message_at, record.first_general_message_at);
     const goal = anchor ? timedGoal : earliestObserved(record.observed_goal_at, record.first_goal_at);
     const firstWin = anchor ? timedFirstWin : earliestObserved(record.observed_win_at, record.first_win_at);
@@ -191,7 +188,7 @@ export function buildActivationV40Model({
       days_since_activation: elapsedDays,
       introduction_posted: Boolean(intro),
       replied_to_two_members: Boolean(replies),
-      first_training_post: Boolean(training),
+      first_training_post: Boolean(training || taskSubmissionObserved),
       first_general_message: Boolean(general),
       community_participated: Boolean(firstCommunity),
       community_participated_at: firstCommunity,

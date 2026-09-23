@@ -18,6 +18,7 @@ import {
   handleV40Interaction,
   hydrateActivationIdentities,
   recordActivationCheckinWin,
+  recordCommunityNudgeDetails,
   releaseWeeklyDigestDate,
   runWeeklyDigestScheduler,
   saveTeamApplicationDraft,
@@ -145,6 +146,10 @@ export class DiscordGateway extends DiscordGatewayV39 {
 
   async recordActivationCheckinWin(discordUserId, timestamp, interactionId, identity) {
     return recordActivationCheckinWin(this, discordUserId, timestamp, interactionId, identity);
+  }
+
+  async recordCommunityNudgeDetails(discordUserId, note, interactionId) {
+    return recordCommunityNudgeDetails(this, discordUserId, note, interactionId);
   }
 
   async saveTeamApplicationDraft(discordUserId, draft) {

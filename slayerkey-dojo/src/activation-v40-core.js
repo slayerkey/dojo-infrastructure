@@ -122,9 +122,8 @@ export function buildActivationV40Model({
     const training = qualifiedAt(record.first_training_post_at, anchor);
     const general = qualifiedAt(record.first_general_message_at, anchor);
     const goal = qualifiedAt(record.first_goal_at, anchor);
-    const firstCommunity = earliestQualified(anchor, record.first_community_message_at, record.first_general_message_at);
-    const firstAnyMessage = earliestQualified(
-      anchor,
+    const firstCommunity = earliestObserved(record.first_community_message_at, record.first_general_message_at);
+    const firstAnyMessage = earliestObserved(
       record.first_any_message_at,
       record.introduction_at,
       record.replied_to_two_members_at,
@@ -377,10 +376,10 @@ function qualifiedAt(value, anchor) {
   return new Date(value).toISOString();
 }
 
-function earliestQualified(anchor, ...values) {
+function earliestObserved(...values) {
   const candidates = values
-    .map((value) => qualifiedAt(value, anchor))
-    .filter(Boolean)
+    .filter(validIso)
+    .map((value) => new Date(value).toISOString())
     .sort((a, b) => Date.parse(a) - Date.parse(b));
   return candidates[0] || null;
 }

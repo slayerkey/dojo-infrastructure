@@ -25,10 +25,11 @@ function mockStorage(initial = []) {
   };
 }
 
-test("task tag parser recognizes numbered Fundamentals tags and Month 2", () => {
+test("task tag parser recognizes numbered Fundamentals tags and month phases", () => {
   assert.deepEqual(community.parseTaskStage("#1 - Main Agent"), { stage: 1, label: "#1 - Main Agent" });
   assert.deepEqual(community.parseTaskStage("#7 - Pre Round LEAD"), { stage: 7, label: "#7 - Pre Round LEAD" });
-  assert.deepEqual(community.parseTaskStage("Month 2 - DM Review"), { stage: 8, label: "Month 2 - DM Review" });
+  assert.deepEqual(community.parseTaskStage("Month 1 - Rookie"), { stage: 8, label: "Month 1 - Rookie" });
+  assert.deepEqual(community.parseTaskStage("Month 2 - DM Review"), { stage: 9, label: "Month 2 - DM Review" });
   assert.equal(community.parseTaskStage("Random tag"), null);
 });
 

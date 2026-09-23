@@ -8,7 +8,7 @@ import {
   observeRiotLink,
   recordLiveActivationMessage,
 } from "../src/activation-core.js";
-import { beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
+import { __test as backfill, beginActivationBackfill, getRetryAfterMs } from "../src/activation-backfill.js";
 import {
   claimActivationCommandRegistration,
   completeActivationCommandRegistration,
@@ -185,6 +185,44 @@ test("Discord 429 retry behavior uses the larger retry_after signal with a one-s
   assert.equal(getRetryAfterMs({}, { get() { return null; } }), 1000);
 });
 
+
+test("backfill seeds every current Dojo-role member even without a tenure record", async () => {
+  const values = new Map();
+  const storage = {
+    async get(key) { return values.get(key); },
+    async put(key, value) { values.set(key, structuredClone(value)); },
+  };
+  const gateway = {
+    env: {
+      DISCORD_GUILD_ID: "guild",
+      DISCORD_DOJO_ROLE_ID: "dojo",
+      DISCORD_BOT_TOKEN: "token",
+    },
+    ctx: { storage },
+    async getTenureRecord() { return null; },
+  };
+
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify([{
+    joined_at: "2026-06-01T00:00:00.000Z",
+    roles: ["dojo"],
+    user: { id: "777", username: "older", global_name: "Older Member", bot: false },
+  }]), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  try {
+    const count = await backfill.seedCurrentDojoRoleMembers(gateway);
+    assert.equal(count, 1);
+    const stored = values.get("activation:v3:member:777");
+    assert.equal(stored.discord_user_id, "777");
+    assert.equal(stored.membership_active, true);
+    assert.equal(stored.activation_started_at, null);
+    assert.equal(stored.activation_anchor_source, "unknown");
+    assert.equal(stored.cohort_source, "discord_dojo_role");
+    assert.equal(stored.discord_joined_at_evidence, "2026-06-01T00:00:00.000Z");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
 
 test("backfill start/resume is idempotent and does not clear member records", async () => {
   const values = new Map([["activation:v3:member:100", { discord_user_id: "100", first_win_at: "2026-09-02T00:00:00.000Z" }]]);

@@ -7,6 +7,7 @@ import {
   pseudonymousWhopDistinctId,
   resolveCustomerPosthogIdentity,
   signIdentityBridgeBody,
+  syncActivationPosthogBatch,
   syncActivationPosthogMember,
 } from "../src/posthog-journey.js";
 import {
@@ -44,9 +45,12 @@ function memoryStorage(initial = []) {
 
 function memoryKv(initial = []) {
   const values = new Map(initial);
+  let reads = 0;
   return {
     values,
+    get reads() { return reads; },
     async get(key, type) {
+      reads += 1;
       const value = values.get(key);
       if (value == null) return null;
       if (type === "json") return typeof value === "string" ? JSON.parse(value) : structuredClone(value);
@@ -299,6 +303,50 @@ test("all eight activation milestones emit once and retry/backfill does not dupl
   const retry = await syncActivationPosthogMember(gateway, "900001");
   assert.equal(retry.emitted, 0);
   assert.equal(captures.length, 8);
+});
+
+test("fully delivered members do not read Workers KV during reconciliation", async () => {
+  const record = {
+    discord_user_id: "900001",
+    activation_started_at: anchor,
+    introduction_at: "2026-09-01T01:00:00.000Z",
+    posthog_delivery: {
+      introduction_posted: {
+        milestone_at: "2026-09-01T01:00:00.000Z",
+        delivered_at: "2026-09-01T01:01:00.000Z",
+      },
+    },
+  };
+  const { gateway, memberLinks } = gatewayFixture({
+    record,
+    posthogDistinctId: "browser_no_read",
+  });
+
+  const result = await syncActivationPosthogMember(gateway, "900001");
+  assert.equal(result.ok, true);
+  assert.equal(result.emitted, 0);
+  assert.equal(memberLinks.reads, 0);
+});
+
+test("scheduled PostHog batch is throttled to one reconciliation per 15 minutes", async () => {
+  const { gateway, memberLinks } = gatewayFixture({
+    posthogDistinctId: "browser_throttle",
+    record: {
+      discord_user_id: "900001",
+      activation_started_at: anchor,
+      introduction_at: "2026-09-01T01:00:00.000Z",
+    },
+  });
+
+  const first = await syncActivationPosthogBatch(gateway, { now_ms: Date.parse("2026-09-23T20:00:00.000Z") });
+  assert.equal(first.skipped, undefined);
+  assert.equal(first.emitted, 1);
+  assert.equal(memberLinks.reads, 1);
+
+  const second = await syncActivationPosthogBatch(gateway, { now_ms: Date.parse("2026-09-23T20:01:00.000Z") });
+  assert.equal(second.skipped, "throttled");
+  assert.equal(second.checked, 0);
+  assert.equal(memberLinks.reads, 1);
 });
 
 test("PostHog payload never contains raw Whop ID or raw Discord ID", async () => {

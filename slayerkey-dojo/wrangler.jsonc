@@ -15,7 +15,8 @@
     "DISCORD_OWNER_USER_ID": "764331455077285898",
     "DISCORD_DOJO_ROLE_ID": "1524461044754550964",
     "WHOP_ANNUAL_PLAN_IDS": "plan_kaaoYadRlBi4n",
-    "POSTHOG_CAPTURE_URL": "https://us.i.posthog.com/i/v0/e/"
+    "POSTHOG_CAPTURE_URL": "https://us.i.posthog.com/i/v0/e/",
+    "POSTHOG_PROJECT_TOKEN": "phc_m92yxHMa2BTnSu7KmebGKu8sEitMki4oPhdLTKZzcpMc"
   },
   "kv_namespaces": [
     {

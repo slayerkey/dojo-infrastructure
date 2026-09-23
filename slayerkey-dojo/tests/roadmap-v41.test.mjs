@@ -66,8 +66,11 @@ test("channel resolver never prefers old-introductions over the live introductio
   assert.equal(roadmap.roadmapChannelMatchScore("👋┃introductions", ["introductions"]), 100);
 });
 
-test("roadmap-preview is registered as an owner verification command", () => {
+test("roadmap preview and visibility commands are registered", () => {
   assert.equal(ROADMAP_COMMANDS.some((command) => command.name === "roadmap-preview"), true);
+  const visibility = ROADMAP_COMMANDS.find((command) => command.name === "roadmap-visibility");
+  assert.ok(visibility);
+  assert.deepEqual(visibility.options[0].choices.map((choice) => choice.value), ["public", "private"]);
 });
 
 test("roadmap preserves the exact Whop onboarding and Fundamentals links", () => {
@@ -168,12 +171,14 @@ test("targeted member state reads existing activation and team application witho
   const gateway = {
     ctx: { storage: store.api },
     async getTenureRecord(id) { return store.values.get("tenure:" + id) || null; },
+    async getTaskStageV47() { return { stage: 4, label: "#4 - Daily Routine" }; },
   };
 
   const state = await getRoadmapV41State(gateway, "100");
   assert.equal(state.ok, true);
   assert.equal(state.activation.first_win_posted, true);
   assert.equal(state.team_application.status, "pending");
+  assert.equal(state.task_stage.stage, 4);
   assert.equal(state.config.channels.start_here, "123");
 });
 
@@ -219,4 +224,15 @@ test("roadmap view stays below Discord message limit", () => {
     },
   });
   assert.ok(roadmap.formatRoadmapView(model).length <= 1950);
+});
+
+
+test("roadmap model carries the member's highest tagged Fundamentals task stage", () => {
+  const model = roadmap.buildRoadmapModel({
+    activation: {},
+    task_stage: { stage: 7, label: "#7 - Pre Round LEAD" },
+    config: { channels: {} },
+  });
+  assert.equal(model.task_stage.stage, 7);
+  assert.equal(model.task_stage.label, "#7 - Pre Round LEAD");
 });

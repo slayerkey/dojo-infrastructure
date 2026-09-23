@@ -181,6 +181,7 @@ export function buildActivationV40Model({
       task_stage_label: taskStage?.label || null,
       last_intervention: intervention?.last_action || null,
       last_intervention_at: intervention?.last_intervention_at || null,
+      community_note: intervention?.community_note || null,
       status: intervention?.status || null,
       snooze_until: intervention?.snooze_until || null,
     };
@@ -290,6 +291,9 @@ export function applyInterventionAction(previous, action, now = new Date().toISO
   } else if (action === "community_break") {
     next.status = "taking_break";
     next.snooze_until = new Date(Date.parse(timestamp) + 30 * DAY_MS).toISOString();
+  } else if (action === "community_details") {
+    next.status = "community_replied";
+    next.snooze_until = null;
   }
   return { state: next, duplicate: false };
 }

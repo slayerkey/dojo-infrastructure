@@ -770,6 +770,30 @@ test("activation model derives any-message and community participation from hist
   assert.equal(member.task_stage_label, "#4 - Daily Routine");
 });
 
+test("Weekly Digest uses historical evidence for older members with unknown activation anchors", () => {
+  const model = buildActivationV40Model({
+    records: [{
+      discord_user_id: "old",
+      membership_active: true,
+      activation_started_at: null,
+      observed_introduction_at: "2026-07-01T01:00:00.000Z",
+      observed_community_message_at: "2026-07-02T01:00:00.000Z",
+      observed_win_at: "2026-07-03T01:00:00.000Z",
+    }],
+    currentMembers: [guildMember("old")],
+    totals: { old: 0 },
+    taskStages: { old: { stage: 9, label: "Month 2 - DM Review" } },
+    now: new Date("2026-09-10T00:00:00.000Z"),
+  });
+  const member = model.members[0];
+  assert.equal(member.introduction_posted, true);
+  assert.equal(member.community_participated, true);
+  assert.equal(member.first_training_post, true);
+  assert.equal(member.first_win_posted, true);
+  assert.equal(member.first_win_within_7_days, false);
+  assert.equal(member.any_message_observed, true);
+});
+
 test("recent weekly messages or a task-stage submission prevent false no-message-ever classification", () => {
   const recent = buildActivationV40Model({
     records: [activationRecord("100")],

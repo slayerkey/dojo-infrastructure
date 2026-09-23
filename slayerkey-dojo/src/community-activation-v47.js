@@ -218,7 +218,15 @@ export function parseTaskStage(label) {
     const stage = Number(numbered[1]);
     if (Number.isFinite(stage) && stage >= 1 && stage <= 99) return { stage, label: text };
   }
-  if (/month\s*2/i.test(text)) return { stage: 8, label: text };
+  const month = /month\s*(\d+)/i.exec(text);
+  if (month) {
+    const monthNumber = Number(month[1]);
+    if (Number.isFinite(monthNumber) && monthNumber >= 1 && monthNumber <= 24) {
+      // Month phases come after the seven Fundamentals tasks. The numeric stage
+      // is internal ordering only; the member-facing digest uses the real tag label.
+      return { stage: 7 + monthNumber, label: text };
+    }
+  }
   return null;
 }
 

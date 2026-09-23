@@ -153,7 +153,7 @@ export async function handleCustomerIdentityBridge(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "POST required." }, { status: 405 });
   }
-  if (!env.DOJO_IDENTITY_BRIDGE_SECRET || !env.MEMBER_LINKS) {
+  if ((!env.DOJO_IDENTITY_BRIDGE_SECRET && !env.WHOP_WEBHOOK_SECRET) || !env.MEMBER_LINKS) {
     return Response.json({ ok: false, error: "Identity bridge is not configured." }, { status: 503 });
   }
 

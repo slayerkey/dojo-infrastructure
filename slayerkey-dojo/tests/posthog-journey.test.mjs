@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import {
   handleCustomerIdentityBridge,
@@ -141,6 +141,7 @@ test("identity bridge accepts authenticated server handoff and preserves existin
   const rawBody = JSON.stringify({
     whop_user_id: "user_handoff",
     posthog_distinct_id: "browser_handoff",
+    payment_id: "pay_handoff",
   });
   const signature = await signIdentityBridgeBody(secret, timestamp, rawBody);
   const request = new Request("https://worker.example/internal/customer-identity", {
@@ -162,34 +163,83 @@ test("identity bridge accepts authenticated server handoff and preserves existin
   assert.equal(stored.posthog_distinct_id, "browser_handoff");
 });
 
-test("identity bridge derives the shared signing key from the Whop API key", async () => {
-  const apiKey = "whop_shared_api_key_test";
-  const derivedSecret = createHmac("sha256", apiKey)
-    .update("slayerkey-dojo-identity-bridge-v1")
-    .digest("hex");
-  const timestamp = String(Math.floor(Date.now() / 1000));
+test("identity bridge verifies website identity against Whop payment metadata without a shared secret", async () => {
+  const originalFetch = globalThis.fetch;
+  const memberLinks = memoryKv();
   const rawBody = JSON.stringify({
     whop_user_id: "user_api_key_bridge",
     posthog_distinct_id: "browser_api_key_bridge",
+    payment_id: "pay_api_key_bridge",
   });
-  const signature = await signIdentityBridgeBody(derivedSecret, timestamp, rawBody);
-  const request = new Request("https://worker.example/internal/customer-identity", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Slayerkey-Timestamp": timestamp,
-      "X-Slayerkey-Signature": `sha256=${signature}`,
-    },
-    body: rawBody,
-  });
-  const memberLinks = memoryKv();
-  const response = await handleCustomerIdentityBridge(request, {
-    WHOP_API_KEY: apiKey,
-    MEMBER_LINKS: memberLinks,
-  });
-  assert.equal(response.status, 200);
-  const stored = await memberLinks.get("whop:user_api_key_bridge", "json");
-  assert.equal(stored.posthog_distinct_id, "browser_api_key_bridge");
+  globalThis.fetch = async (url, options) => {
+    assert.equal(String(url), "https://api.whop.com/api/v1/payments/pay_api_key_bridge");
+    assert.equal(options?.headers?.Authorization, "Bearer whop_api_key_test");
+    assert.equal(options?.headers?.["Api-Version-Date"], "2026-09-22-2");
+    return new Response(JSON.stringify({
+      id: "pay_api_key_bridge",
+      user: { id: "user_api_key_bridge" },
+      company: { id: "biz_test" },
+      status: "succeeded",
+      paid_at: "2026-09-23T16:00:00.000Z",
+      metadata: { posthog_distinct_id: "browser_api_key_bridge" },
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  try {
+    const response = await handleCustomerIdentityBridge(
+      new Request("https://worker.example/internal/customer-identity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: rawBody,
+      }),
+      {
+        WHOP_API_KEY: "whop_api_key_test",
+        WHOP_COMPANY_ID: "biz_test",
+        MEMBER_LINKS: memberLinks,
+      },
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.verified_by, "whop_payment");
+    const stored = await memberLinks.get("whop:user_api_key_bridge", "json");
+    assert.equal(stored.posthog_distinct_id, "browser_api_key_bridge");
+    assert.equal(stored.posthog_identity_verified_by, "whop_payment");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("identity bridge rejects payment proof when Whop metadata does not match", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    id: "pay_wrong_meta",
+    user: { id: "user_wrong_meta" },
+    company: { id: "biz_test" },
+    status: "succeeded",
+    metadata: { posthog_distinct_id: "different_browser_id" },
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  try {
+    const response = await handleCustomerIdentityBridge(
+      new Request("https://worker.example/internal/customer-identity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          whop_user_id: "user_wrong_meta",
+          posthog_distinct_id: "browser_expected",
+          payment_id: "pay_wrong_meta",
+        }),
+      }),
+      {
+        WHOP_API_KEY: "whop_api_key_test",
+        WHOP_COMPANY_ID: "biz_test",
+        MEMBER_LINKS: memoryKv(),
+      },
+    );
+    assert.equal(response.status, 401);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("identity bridge rejects an invalid signature", async () => {
@@ -199,7 +249,7 @@ test("identity bridge rejects an invalid signature", async () => {
       "X-Slayerkey-Timestamp": String(Math.floor(Date.now() / 1000)),
       "X-Slayerkey-Signature": "sha256=" + "0".repeat(64),
     },
-    body: JSON.stringify({ whop_user_id: "private", posthog_distinct_id: "public-ish" }),
+    body: JSON.stringify({ whop_user_id: "private", posthog_distinct_id: "public-ish", payment_id: "pay_private" }),
   });
   const response = await handleCustomerIdentityBridge(request, {
     DOJO_IDENTITY_BRIDGE_SECRET: "correct_secret",

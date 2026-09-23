@@ -169,14 +169,14 @@ test("identity bridge verifies website identity against Whop payment metadata wi
   const rawBody = JSON.stringify({
     whop_user_id: "user_api_key_bridge",
     posthog_distinct_id: "browser_api_key_bridge",
-    payment_id: "pay_api_key_bridge",
+    payment_id: "pay_ApiKeyBridge123",
   });
   globalThis.fetch = async (url, options) => {
-    assert.equal(String(url), "https://api.whop.com/api/v1/payments/pay_api_key_bridge");
+    assert.equal(String(url), "https://api.whop.com/api/v1/payments/pay_ApiKeyBridge123");
     assert.equal(options?.headers?.Authorization, "Bearer whop_api_key_test");
     assert.equal(options?.headers?.["Api-Version-Date"], "2026-09-22-2");
     return new Response(JSON.stringify({
-      id: "pay_api_key_bridge",
+      id: "pay_ApiKeyBridge123",
       user: { id: "user_api_key_bridge" },
       company: { id: "biz_test" },
       status: "succeeded",
@@ -212,7 +212,7 @@ test("identity bridge verifies website identity against Whop payment metadata wi
 test("identity bridge rejects payment proof when Whop metadata does not match", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({
-    id: "pay_wrong_meta",
+    id: "pay_WrongMeta123",
     user: { id: "user_wrong_meta" },
     company: { id: "biz_test" },
     status: "succeeded",
@@ -227,7 +227,7 @@ test("identity bridge rejects payment proof when Whop metadata does not match", 
         body: JSON.stringify({
           whop_user_id: "user_wrong_meta",
           posthog_distinct_id: "browser_expected",
-          payment_id: "pay_wrong_meta",
+          payment_id: "pay_WrongMeta123",
         }),
       }),
       {

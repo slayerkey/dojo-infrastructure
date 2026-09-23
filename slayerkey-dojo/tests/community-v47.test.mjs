@@ -94,6 +94,36 @@ test("live General message records both first-any-message and community particip
   assert.equal(Object.hasOwn(stored, "content"), false);
 });
 
+test("verified Dojo-role fallback stores live evidence without inventing an activation anchor", async () => {
+  const { values, storage } = mockStorage([
+    ["roadmap:v41:config", {
+      channels: { general: ACTIVATION_DESTINATIONS.general },
+    }],
+  ]);
+  const gateway = {
+    ctx: { storage },
+    env: { DISCORD_BOT_TOKEN: "test" },
+    async getTenureRecord() { return null; },
+  };
+
+  const result = await observeV47Message(gateway, {
+    channel_id: ACTIVATION_DESTINATIONS.general,
+    timestamp: "2026-09-02T12:00:00.000Z",
+    author: { id: "777", username: "older", bot: false },
+    member: { nick: "Older Member" },
+    content: "must not be stored",
+  }, true);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.anchor_valid, false);
+  const stored = values.get("activation:v3:member:777");
+  assert.equal(stored.activation_started_at, null);
+  assert.equal(stored.cohort_source, "discord_dojo_role");
+  assert.equal(stored.observed_any_message_at, "2026-09-02T12:00:00.000Z");
+  assert.equal(stored.observed_community_message_at, "2026-09-02T12:00:00.000Z");
+  assert.equal(Object.hasOwn(stored, "content"), false);
+});
+
 test("unknown guild participants are not turned into Dojo activation records", async () => {
   const { values, storage } = mockStorage([
     ["roadmap:v41:config", {

@@ -113,7 +113,10 @@ export class DiscordGateway extends DiscordGatewayV40 {
         String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "") &&
         !payload?.d?.author?.bot
       ) {
-        await observeV47Message(this, payload.d);
+        const roles = Array.isArray(payload?.d?.member?.roles) ? payload.d.member.roles.map(String) : [];
+        if (roles.includes(String(this.env.DISCORD_DOJO_ROLE_ID || ""))) {
+          await observeV47Message(this, payload.d);
+        }
       }
 
       if (

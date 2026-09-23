@@ -224,6 +224,40 @@ test("verified Dojo-role member can load roadmap without stored tenure or activa
   assert.equal(store.values.has("activation:v3:member:role-member"), false);
 });
 
+test("unknown-anchor member roadmap uses factual historical evidence without inventing a start date", async () => {
+  const store = storage([
+    ["activation:v3:member:older", {
+      discord_user_id: "older",
+      membership_active: true,
+      activation_started_at: null,
+      activation_anchor_source: "unknown",
+      observed_introduction_at: "2026-07-01T01:00:00.000Z",
+      observed_replied_to_two_members_at: "2026-07-01T02:00:00.000Z",
+      observed_community_message_at: "2026-07-02T01:00:00.000Z",
+      observed_goal_at: "2026-07-03T01:00:00.000Z",
+      observed_win_at: "2026-07-04T01:00:00.000Z",
+    }],
+    ["roadmap:v41:config", { channels: {} }],
+  ]);
+  const gateway = {
+    ctx: { storage: store.api },
+    async getTenureRecord() { return null; },
+    async getTaskStageV47() { return { stage: 9, label: "Month 2 - DM Review" }; },
+  };
+
+  const state = await getRoadmapV41State(gateway, "older", false, true);
+  assert.equal(state.ok, true);
+  assert.equal(state.activation.anchor_valid, false);
+  assert.equal(state.activation.activation_started_at, null);
+  assert.equal(state.activation.introduction_posted, true);
+  assert.equal(state.activation.replied_to_two_members, true);
+  assert.equal(state.activation.first_training_post, true);
+  assert.equal(state.activation.first_general_message, true);
+  assert.equal(state.activation.goal_posted, true);
+  assert.equal(state.activation.first_win_posted, true);
+  assert.equal(state.activation.first_win_within_7_days, false);
+});
+
 test("roadmap state refuses users outside the known Dojo cohort", async () => {
   const store = storage();
   const gateway = {

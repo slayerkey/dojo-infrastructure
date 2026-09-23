@@ -108,16 +108,51 @@ export async function buildActivationAudit(gateway) {
   return buildAuditModel(records);
 }
 
-export function applyActivationMessage(record, { message, destinationKey, threadOwnerId = null, isThread = false }) {
+export function applyActivationMessage(record, { message, destinationKey, threadOwnerId = null, isThread = false, communitySource = null }) {
   const next = mergeIdentityIntoRecord({ ...(record || {}) }, identityFromMessage(message));
   const userId = String(message?.author?.id || next.discord_user_id || "");
   const timestamp = validIso(message?.timestamp) ? new Date(message.timestamp).toISOString() : null;
-  const anchor = validIso(next.activation_started_at) ? new Date(next.activation_started_at).toISOString() : null;
-  if (!userId || !timestamp || !anchor || Date.parse(timestamp) < Date.parse(anchor)) return next;
+  if (!userId || !timestamp) return next;
 
   const inThread = Boolean(isThread || threadOwnerId);
   const isThreadOwner = !inThread || (Boolean(threadOwnerId) && String(threadOwnerId) === userId);
   const referencedAuthor = String(message?.referenced_message?.author?.id || "");
+
+  // Historical evidence is deliberately separate from timed activation metrics.
+  // This lets older Dojo members recover factual roadmap progress even when their
+  // original membership start date was never captured, without inventing an anchor.
+  next.observed_any_message_at = earliestIso(next.observed_any_message_at, timestamp);
+  if (communitySource || destinationKey === "general") {
+    next.observed_community_message_at = earliestIso(next.observed_community_message_at, timestamp);
+    if (!next.observed_community_message_source) {
+      next.observed_community_message_source = communitySource || "general";
+    }
+  }
+
+  if (destinationKey === "introductions") {
+    if (inThread) {
+      if (isThreadOwner) next.observed_introduction_at = earliestIso(next.observed_introduction_at, timestamp);
+      else addObservedIntroInteraction(next, String(threadOwnerId), timestamp, userId);
+    } else if (message?.message_reference?.message_id) {
+      if (referencedAuthor && referencedAuthor !== userId) addObservedIntroInteraction(next, referencedAuthor, timestamp, userId);
+    } else {
+      next.observed_introduction_at = earliestIso(next.observed_introduction_at, timestamp);
+    }
+  } else if (destinationKey === "training" && isThreadOwner) {
+    next.observed_training_post_at = earliestIso(next.observed_training_post_at, timestamp);
+  } else if (destinationKey === "general") {
+    next.observed_general_message_at = earliestIso(next.observed_general_message_at, timestamp);
+  } else if (destinationKey === "goals" && isThreadOwner) {
+    next.observed_goal_at = earliestIso(next.observed_goal_at, timestamp);
+  } else if (destinationKey === "wins" && isThreadOwner) {
+    next.observed_win_at = earliestIso(next.observed_win_at, timestamp);
+  }
+
+  const anchor = validIso(next.activation_started_at) ? new Date(next.activation_started_at).toISOString() : null;
+  if (!anchor || Date.parse(timestamp) < Date.parse(anchor)) {
+    next.updated_at = new Date().toISOString();
+    return next;
+  }
 
   if (destinationKey === "introductions") {
     if (inThread) {
@@ -150,6 +185,21 @@ function addIntroInteraction(record, targetId, timestamp, selfId) {
   targets.sort((a, b) => Date.parse(a.at || 0) - Date.parse(b.at || 0));
   record.intro_reply_targets = targets;
   if (targets.length >= 2) record.replied_to_two_members_at = targets[1]?.at || null;
+}
+
+function addObservedIntroInteraction(record, targetId, timestamp, selfId) {
+  if (!targetId || targetId === selfId) return;
+  const targets = Array.isArray(record.observed_intro_reply_targets)
+    ? record.observed_intro_reply_targets.map((v) => ({ ...v }))
+    : [];
+  const existing = targets.find((v) => String(v.user_id) === targetId);
+  if (existing) existing.at = earliestIso(existing.at, timestamp);
+  else targets.push({ user_id: targetId, at: timestamp });
+  targets.sort((a, b) => Date.parse(a.at || 0) - Date.parse(b.at || 0));
+  record.observed_intro_reply_targets = targets;
+  if (targets.length >= 2) {
+    record.observed_replied_to_two_members_at = targets[1]?.at || null;
+  }
 }
 
 export function mergeTenureIntoRecord(record, userId, tenure) {
@@ -187,6 +237,21 @@ export function deriveMember(record) {
     riot_linked: Boolean(record?.riot_linked_observed_at || record?.riot_linked_current),
     introduction_at: intro, replied_to_two_members_at: twoReplies, first_training_post_at: training,
     first_general_message_at: general, first_goal_at: goal, first_win_at: firstWin,
+    any_message_observed: Boolean(record?.observed_any_message_at),
+    introduction_observed: Boolean(record?.observed_introduction_at),
+    replied_to_two_members_observed: Boolean(record?.observed_replied_to_two_members_at),
+    training_post_observed: Boolean(record?.observed_training_post_at),
+    general_message_observed: Boolean(record?.observed_general_message_at),
+    community_participated_observed: Boolean(record?.observed_community_message_at || record?.observed_general_message_at),
+    goal_observed: Boolean(record?.observed_goal_at),
+    win_observed: Boolean(record?.observed_win_at),
+    observed_introduction_at: validIso(record?.observed_introduction_at) ? new Date(record.observed_introduction_at).toISOString() : null,
+    observed_replied_to_two_members_at: validIso(record?.observed_replied_to_two_members_at) ? new Date(record.observed_replied_to_two_members_at).toISOString() : null,
+    observed_training_post_at: validIso(record?.observed_training_post_at) ? new Date(record.observed_training_post_at).toISOString() : null,
+    observed_general_message_at: validIso(record?.observed_general_message_at) ? new Date(record.observed_general_message_at).toISOString() : null,
+    observed_community_message_at: validIso(record?.observed_community_message_at) ? new Date(record.observed_community_message_at).toISOString() : null,
+    observed_goal_at: validIso(record?.observed_goal_at) ? new Date(record.observed_goal_at).toISOString() : null,
+    observed_win_at: validIso(record?.observed_win_at) ? new Date(record.observed_win_at).toISOString() : null,
   };
 }
 

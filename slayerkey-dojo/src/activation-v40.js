@@ -59,6 +59,11 @@ export const V40_COMMANDS = Object.freeze([
     type: 1,
   },
   {
+    name: "task-stage-scan",
+    description: "Scan task forum tags and update each member's latest Fundamentals task stage",
+    type: 1,
+  },
+  {
     name: "activation-checkin-preview",
     description: "Preview the first-win check-in for one member without sending it",
     type: 1,
@@ -129,7 +134,7 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "task-stage-scan", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
@@ -209,6 +214,18 @@ export async function handleV40Interaction(request, env, ctx) {
       postWeeklyDigest(env, stub, String(interaction.channel_id || ""), { manual: true })
         .then(() => editOriginalInteraction(interaction, env, { content: "Weekly Digest posted from a fresh scan." }))
         .catch((error) => failInteraction(interaction, env, "Weekly Digest failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
+  if (command === "task-stage-scan") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can scan task stages.");
+    ctx.waitUntil(
+      stub.scanTaskStagesV47()
+        .then((result) => editOriginalInteraction(interaction, env, {
+          content: `Task-stage scan complete. **${Number(result?.scanned || 0)}** task threads checked; **${Number(result?.matched || 0)}** had recognized task tags. Weekly Digest and member roadmaps can now show the highest tagged task stage.`,
+        }))
+        .catch((error) => failInteraction(interaction, env, "Task-stage scan failed", error)),
     );
     return deferredEphemeral();
   }
@@ -519,7 +536,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.3").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.4").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -542,9 +559,9 @@ export async function ensureV40CommandsOnce(env, stub) {
       }
     }
 
-    await stub.completeV40CommandRegistration("activation-v40.3");
+    await stub.completeV40CommandRegistration("activation-v40.4");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.3", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.4", safeError(error)).catch(() => {});
     throw error;
   }
 }

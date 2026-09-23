@@ -8,6 +8,17 @@ const DISCORD_API = "https://discord.com/api/v10";
 
 export async function postWeeklyDigest(env, stub, channelId, options = {}) {
   if (!channelId) throw new Error("No Weekly Digest channel is configured.");
+
+  // Live THREAD_CREATE/THREAD_UPDATE events keep task stages fresh continuously.
+  // The digest also performs a full task-forum safety scan immediately before
+  // it builds the weekly snapshot so a missed gateway event cannot leave the
+  // report stale. Fail open so a Discord archive hiccup never blocks the digest.
+  if (typeof stub?.scanTaskStagesV47 === "function") {
+    await stub.scanTaskStagesV47().catch((error) => {
+      console.error("Weekly Digest task-stage safety scan failed; continuing with stored stages:", error);
+    });
+  }
+
   const model = await buildWeeklyDigestModel(env, stub);
   const payload = buildWeeklyDigestPayload(model, {
     title: options.manual ? "📊 Weekly Digest — Manual Check" : "📊 Weekly Digest",
@@ -62,121 +73,131 @@ export function buildWeeklyDigestPayload(model, options = {}) {
   );
   const activated = members.filter((member) => member.first_win_posted);
 
-  const fields = [{
-    name: "Activation Funnel",
-    value: [
+  const embeds = [{
+    title: options.title || "📊 Weekly Digest",
+    description: [
+      "**The funnel:** Onboarding → Community Participation → First Win",
+      "",
       `**Current members:** ${members.length}`,
-      `🚨 No tracked message ever: **${neverStarted.length}**`,
+      `🚨 No message evidence found: **${neverStarted.length}**`,
       `👋 Onboarded, not in community: **${onboardedNotSocial.length}**`,
       `💤 Participated before, 0 msgs / 7d: **${lapsed.length}**`,
       `🏆 Active, no first win: **${activeNoWin.length}**`,
       `✅ First win posted: **${activated.length}**`,
+      "",
+      "**Community Participation** = tracked activity in General, Community Help, or Clips.",
+      "**No message evidence found** is conservative: recent tracked messages, activation posts, and task submissions all count as evidence.",
     ].join("\n"),
-    inline: false,
+    footer: { text: options.footer || "Current Dojo members only." },
+    timestamp: new Date().toISOString(),
   }];
 
-  appendDigestGroup(fields, "🚨 NO TRACKED MESSAGE EVER", neverStarted);
-  appendDigestGroup(fields, "👋 ONBOARDED · NOT IN COMMUNITY", onboardedNotSocial);
-  appendDigestGroup(fields, "💤 LAPSED · 0 MSGS / 7D", lapsed);
-  appendDigestGroup(fields, "🏆 ACTIVE · NO FIRST WIN", activeNoWin);
+  appendDigestGroup(embeds, "🚨 NO MESSAGE EVIDENCE FOUND", neverStarted);
+  appendDigestGroup(embeds, "👋 ONBOARDED · NOT IN COMMUNITY", onboardedNotSocial);
+  appendDigestGroup(embeds, "💤 LAPSED · 0 MSGS / 7D", lapsed);
+  appendDigestGroup(embeds, "🏆 ACTIVE · NO FIRST WIN", activeNoWin);
 
   if (!neverStarted.length && !onboardedNotSocial.length && !lapsed.length && !activeNoWin.length) {
-    fields.push({
-      name: "✅ No members need a check",
-      value: "Every current member has community participation, recent activity, and a tracked first win.",
-      inline: false,
+    embeds.push({
+      title: "✅ No members need a check",
+      description: "Every current member has community participation, recent activity, and a tracked first win.",
     });
   }
 
   return {
     content: "",
-    embeds: [{
-      title: options.title || "📊 Weekly Digest",
-      description: [
-        "**The funnel:** Onboarding → Community Participation → First Win",
-        "",
-        "**Community Participation** currently means a tracked message in General, Community Help, or Clips. Existing General history is backfilled; Help/Clips expand prospectively as members post.",
-        "",
-        "**No tracked message ever** means the bot has no message evidence from the tracked onboarding/activation history or live Dojo message tracking. It is intentionally phrased as “tracked,” not an absolute claim about every historical Discord message.",
-      ].join("\n"),
-      fields,
-      footer: { text: options.footer || "Current Dojo members only." },
-      timestamp: new Date().toISOString(),
-    }],
+    embeds: embeds.slice(0, 10),
     allowed_mentions: { parse: [] },
   };
 }
 
-function appendDigestGroup(fields, label, members) {
+function appendDigestGroup(embeds, label, members) {
   if (!members.length) return;
-  const lines = members
+  const sorted = members
     .slice()
     .sort((a, b) => {
       const aCount = Number(a.messages_last_7_days || 0);
       const bCount = Number(b.messages_last_7_days || 0);
       return aCount - bCount || String(a.display_name || "").localeCompare(String(b.display_name || ""));
-    })
-    .map((member) => formatDigestMember(member));
-  const chunks = chunkTextLines(lines, 900);
-  chunks.forEach((value, index) => {
-    fields.push({
-      name: index === 0 ? label + " — " + members.length : label + " (cont.)",
-      value,
-      inline: false,
     });
-  });
+
+  const chunkSize = 15;
+  for (let offset = 0; offset < sorted.length && embeds.length < 10; offset += chunkSize) {
+    const chunk = sorted.slice(offset, offset + chunkSize);
+    embeds.push({
+      title: offset === 0 ? `${label} — ${members.length}` : `${label} (cont.)`,
+      fields: chunk.map((member) => buildDigestMemberField(member)),
+    });
+  }
 }
 
-export function formatDigestMember(member) {
+export function buildDigestMemberField(member) {
   const id = String(member?.discord_user_id || "");
-  const mention = id ? "<@" + id + ">" : "**Unknown member**";
+  const mention = id ? "<@" + id + ">" : "Unknown member";
   let fallback;
   if (member?.username) fallback = "`@" + String(member.username).replace(/`/g, "") + "`";
   else if (member?.display_name && !String(member.display_name).startsWith("Unknown member")) fallback = "`" + String(member.display_name).replace(/`/g, "") + "`";
-  else if (id) fallback = "`Discord ID: " + id + "`";
-  else fallback = "`Unresolved member`";
+  else if (id) fallback = "`ID " + id + "`";
+  else fallback = "`Unresolved`";
 
   const count = Math.max(0, Number(member?.messages_last_7_days || 0));
   const intro = member?.introduction_posted ? "✅" : "❌";
   const community = member?.community_participated ? "✅" : "❌";
   const win = member?.first_win_posted ? "✅" : "❌";
-  const stage = Number(member?.task_stage || 0);
-  const task = stage > 0 ? `#${stage}` : "—";
+  const task = formatTaskStage(member);
 
   const responseLabels = {
     community_still_improving: "Still improving",
     snooze: "Hasn't played much",
     stuck: "Stuck",
     community_break: "Taking a break",
+    community_details: "Details submitted",
   };
   const response = responseLabels[member?.last_intervention] || null;
+  const note = String(member?.community_note || "").trim();
 
-  return [
-    "• " + mention,
-    fallback,
-    `Intro ${intro}`,
-    `Community ${community}`,
-    `Task ${task}`,
-    `Win ${win}`,
-    `7d **${count}**`,
-    response ? `Reply: **${response}**` : null,
-  ].filter(Boolean).join(" · ");
+  const value = [
+    "```text",
+    "Intro   Community   Task        Win   7d",
+    padCell(intro, 7) + " " + padCell(community, 11) + " " + padCell(task, 11) + " " + padCell(win, 5) + " " + count,
+    "```",
+    response ? `**Reply:** ${response}` : null,
+    note ? `**Note:** ${escapeDigestText(note).slice(0, 180)}` : null,
+  ].filter(Boolean).join("\n");
+
+  return {
+    name: mention + " · " + fallback,
+    value,
+    inline: false,
+  };
 }
 
-function chunkTextLines(lines, maxLength) {
-  const chunks = [];
-  let current = "";
-  for (const line of lines) {
-    const next = current ? current + "\n" + line : line;
-    if (current && next.length > maxLength) {
-      chunks.push(current);
-      current = line;
-    } else {
-      current = next;
-    }
+export function formatDigestMember(member) {
+  const field = buildDigestMemberField(member);
+  return field.name + "\n" + field.value;
+}
+
+function formatTaskStage(member) {
+  const label = String(member?.task_stage_label || "").trim();
+  const stage = Number(member?.task_stage || 0);
+  if (/month\s*2/i.test(label)) return "Month 2";
+  if (label) {
+    const numbered = /#\s*(\d+)/i.exec(label);
+    if (numbered) return "#" + numbered[1];
   }
-  if (current) chunks.push(current);
-  return chunks;
+  return stage > 0 ? "#" + stage : "—";
+}
+
+function padCell(value, width) {
+  const text = String(value || "");
+  return text.length >= width ? text.slice(0, width) : text + " ".repeat(width - text.length);
+}
+
+function escapeDigestText(value) {
+  return String(value || "")
+    .replace(/@/g, "@\u200b")
+    .replace(/\r?\n/g, " ")
+    .trim();
 }
 
 async function fetchCurrentDojoMembers(env) {
@@ -217,5 +238,7 @@ async function discordJson(url, env, options = {}) {
 
 export const __test = Object.freeze({
   buildWeeklyDigestPayload,
+  buildDigestMemberField,
   formatDigestMember,
+  formatTaskStage,
 });

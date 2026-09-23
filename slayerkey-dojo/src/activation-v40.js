@@ -15,6 +15,10 @@ import {
   resolveDisplayName,
   validateTeamApplication,
 } from "./activation-v40-core.js";
+import {
+  buildDailyDigestPayload,
+  postDailyDigest,
+} from "./daily-digest-v45.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -875,30 +879,11 @@ async function runV40Audit(interaction, env, stub) {
 
 async function runV40Queue(interaction, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
-  const model = runtime.model;
-  const both = model.queue.attention.filter((member) => member.needs_first_win && member.dormant).length;
-  const summary = [
-    "## Dojo Activation Queue",
-    `**No first win — 7+ days:** ${model.needs_action.day7}`,
-    `**Early no-win — days 3–6:** ${model.needs_action.day3}`,
-    `**0 messages in the last 7 days:** ${model.needs_action.dormant}`,
-    `**Both no-win + 0 messages:** ${both}`,
-    "",
-    "**Dormant = a current Dojo member with 0 tracked Discord messages in the previous 7 completed Arizona days.**",
-    "The same person can appear as both no-win and dormant. Click the member mention to open their Discord profile.",
-  ].join("\n");
-  await editOriginalInteraction(interaction, env, { content: summary });
-
-  if (!model.queue.attention.length) {
-    await sendEphemeralFollowup(interaction, env, "✅ No current members need activation attention right now.");
-    return;
-  }
-
-  const lines = ["## MEMBERS TO CHECK"];
-  for (const member of model.queue.attention) lines.push(formatQueueMember(member));
-  for (const chunk of chunkLines(lines, 1850)) {
-    await sendEphemeralFollowup(interaction, env, chunk);
-  }
+  const payload = buildDailyDigestPayload(runtime.model, {
+    title: "📊 Dojo Daily Digest",
+    footer: "Needs check = no first win OR 0 messages in the previous 7 completed Arizona days.",
+  });
+  await editOriginalInteraction(interaction, env, payload);
 }
 
 async function runCheckinPreview(interaction, targetId, env, stub) {
@@ -1636,11 +1621,31 @@ function escapeDiscord(value) {
     .replace(/~/g, "\\~");
 }
 
+function phoenixClockParts(date) {
+  const shifted = new Date(date.getTime() - 7 * 60 * 60 * 1000);
+  return {
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+  };
+}
+
+function phoenixDateKey(date) {
+  return new Date(date.getTime() - 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function formatClock(hour, minute) {
+  const h = Number(hour);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const display = h % 12 || 12;
+  return `${display}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
 function safeError(error) {
   return String(error?.message || error || "Unknown error").slice(0, 300);
 }
 
 export const __test = Object.freeze({
+  buildDailyDigestPayload,
   buildCheckinPrompt,
   buildProposedDm,
   checkinButtons,

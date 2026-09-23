@@ -3,6 +3,8 @@ import { MEMBER_PREFIX, SEVEN_DAYS_MS, mergeTenureIntoRecord } from "./activatio
 const encoder = new TextEncoder();
 const DEFAULT_POSTHOG_CAPTURE_URL = "https://us.i.posthog.com/i/v0/e/";
 const BRIDGE_MAX_SKEW_MS = 5 * 60 * 1000;
+const POSTHOG_RECONCILE_STATE_KEY = "posthog:v1:reconcile-state";
+const POSTHOG_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
 
 export const JOURNEY_EVENT_NAMES = Object.freeze([
   "introduction_posted",
@@ -65,19 +67,27 @@ export async function syncActivationPosthogMember(gateway, discordUserId, record
   if (!record && !tenure) return { ok: false, reason: "unknown_member" };
   record = mergeTenureIntoRecord(record, userId, tenure);
 
+  const milestones = milestoneCandidates(record);
+  if (!milestones.length) return { ok: true, emitted: 0, pending: 0, kv_reads_needed: false };
+
+  const delivery = { ...(record.posthog_delivery || {}) };
+  const pendingMilestones = milestones.filter((milestone) => {
+    const previous = delivery[milestone.event];
+    return previous?.milestone_at !== milestone.milestone_at;
+  });
+  if (!pendingMilestones.length) {
+    return { ok: true, emitted: 0, pending: 0, kv_reads_needed: false };
+  }
+
+  // Identity resolution is the only hot-path Workers KV read. Do it only when
+  // there is actually an undelivered analytics event to send.
   const identity = await resolveCustomerPosthogIdentity(gateway, userId, tenure);
   if (!identity?.distinct_id) return { ok: false, reason: "identity_unresolved" };
 
-  const milestones = milestoneCandidates(record);
-  if (!milestones.length) return { ok: true, emitted: 0, pending: 0 };
-
-  const delivery = { ...(record.posthog_delivery || {}) };
   let emitted = 0;
   let pending = 0;
 
-  for (const milestone of milestones) {
-    const previous = delivery[milestone.event];
-    if (previous?.milestone_at === milestone.milestone_at) continue;
+  for (const milestone of pendingMilestones) {
 
     const properties = {
       source: "discord",
@@ -109,9 +119,31 @@ export async function syncActivationPosthogMember(gateway, discordUserId, record
   return { ok: pending === 0, emitted, pending };
 }
 
-export async function syncActivationPosthogBatch(gateway) {
+export async function syncActivationPosthogBatch(gateway, options = {}) {
   if (!String(gateway.env?.POSTHOG_PROJECT_TOKEN || "").trim()) {
     return { ok: true, checked: 0, emitted: 0, pending: 0, failed: 0, skipped: "posthog_not_configured" };
+  }
+
+  const nowMs = Number.isFinite(Number(options?.now_ms)) ? Number(options.now_ms) : Date.now();
+  const force = Boolean(options?.force);
+  if (!force) {
+    const previous = await gateway.ctx.storage.get(POSTHOG_RECONCILE_STATE_KEY).catch(() => null);
+    const previousMs = Date.parse(previous?.attempted_at || previous?.completed_at || "");
+    if (Number.isFinite(previousMs) && nowMs - previousMs < POSTHOG_RECONCILE_INTERVAL_MS) {
+      return {
+        ok: true,
+        checked: 0,
+        emitted: 0,
+        pending: 0,
+        failed: 0,
+        skipped: "throttled",
+        next_eligible_at: new Date(previousMs + POSTHOG_RECONCILE_INTERVAL_MS).toISOString(),
+      };
+    }
+    await gateway.ctx.storage.put(POSTHOG_RECONCILE_STATE_KEY, {
+      attempted_at: new Date(nowMs).toISOString(),
+      status: "running",
+    });
   }
 
   const rows = await gateway.ctx.storage.list({ prefix: MEMBER_PREFIX });
@@ -146,7 +178,16 @@ export async function syncActivationPosthogBatch(gateway) {
     }
   }
 
-  return { ok: failed === 0, checked, emitted, pending, failed };
+  const result = { ok: failed === 0, checked, emitted, pending, failed };
+  if (!force) {
+    await gateway.ctx.storage.put(POSTHOG_RECONCILE_STATE_KEY, {
+      attempted_at: new Date(nowMs).toISOString(),
+      completed_at: new Date().toISOString(),
+      status: result.ok ? "complete" : "partial_failure",
+      ...result,
+    });
+  }
+  return result;
 }
 
 export async function handleCustomerIdentityBridge(request, env) {

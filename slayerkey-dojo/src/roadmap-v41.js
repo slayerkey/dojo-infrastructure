@@ -130,7 +130,7 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (command === "roadmap" || customId === "roadmap:v41:view") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
     try {
-      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env));
+      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env), true);
       const config = await stub.getRoadmapV41Config().catch(() => null);
       const isPublic = String(config?.progress_visibility || "public") !== "private";
       return Response.json({
@@ -149,7 +149,7 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (customId === "roadmap:v41:refresh") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
     try {
-      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env));
+      const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env), true);
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't refresh your roadmap: ${safeError(error)}`);
@@ -162,9 +162,9 @@ export async function handleRoadmapV41Interaction(request, env) {
       .map(String)
       .filter((value) => MANUAL_VALUES.has(value));
     try {
-      const saved = await stub.setRoadmapV41Manual(userId, selected, String(interaction.id || ""));
+      const saved = await stub.setRoadmapV41Manual(userId, selected, String(interaction.id || ""), true);
       if (!saved?.ok) return ephemeralMessage(saved?.message || "I couldn't update that checklist.");
-      const view = await buildRoadmapView(userId, env, stub);
+      const view = await buildRoadmapView(userId, env, stub, false, true);
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't update that checklist: ${safeError(error)}`);
@@ -221,7 +221,7 @@ export async function failRoadmapV41CommandRegistration(gateway, version, error)
   });
 }
 
-export async function getRoadmapV41State(gateway, discordUserId, allowPreview = false) {
+export async function getRoadmapV41State(gateway, discordUserId, allowPreview = false, allowRoleFallback = false) {
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
 
@@ -236,38 +236,57 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
       : Promise.resolve(null),
   ]);
 
+  let roleFallback = false;
   if (!activation && !tenure) {
-    if (!allowPreview) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+    if (allowPreview) {
+      const now = new Date().toISOString();
+      const ownerTestRecord = {
+        discord_user_id: userId,
+        activation_started_at: now,
+        roadmap_test_record: true,
+        membership_active: false,
+        created_at: now,
+        updated_at: now,
+      };
+      await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, ownerTestRecord);
 
-    const now = new Date().toISOString();
-    const ownerTestRecord = {
-      discord_user_id: userId,
-      activation_started_at: now,
-      roadmap_test_record: true,
-      membership_active: false,
-      created_at: now,
-      updated_at: now,
-    };
-    await gateway.ctx.storage.put(`${MEMBER_PREFIX}${userId}`, ownerTestRecord);
-
-    return {
-      ok: true,
-      preview: false,
-      test_mode: true,
-      discord_user_id: userId,
-      activation: deriveMember(ownerTestRecord),
-      manual: { completed: [], updated_at: null },
-      team_application: null,
-      task_stage: taskStage || null,
-      config: config || null,
-    };
+      return {
+        ok: true,
+        preview: false,
+        test_mode: true,
+        discord_user_id: userId,
+        activation: deriveMember(ownerTestRecord),
+        manual: { completed: [], updated_at: null },
+        team_application: null,
+        task_stage: taskStage || null,
+        config: config || null,
+      };
+    }
+    if (!allowRoleFallback) {
+      return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+    }
+    // The signed Discord interaction already verified the current Dojo role.
+    // Allow the roadmap to load without inventing a membership/start date or
+    // persisting a fake tenure record for older members whose historical link
+    // was never captured.
+    roleFallback = true;
   }
 
-  const merged = mergeTenureIntoRecord(activation, userId, tenure);
+  const merged = mergeTenureIntoRecord(
+    activation || (roleFallback ? {
+      discord_user_id: userId,
+      membership_active: true,
+      activation_started_at: null,
+      activation_anchor_source: "unknown",
+    } : null),
+    userId,
+    tenure,
+  );
   return {
     ok: true,
     preview: false,
     test_mode: Boolean(merged?.roadmap_test_record),
+    cohort_source: roleFallback ? "discord_dojo_role" : "stored_membership",
     discord_user_id: userId,
     activation: deriveMember(merged),
     manual: {
@@ -284,13 +303,13 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
   };
 }
 
-export async function setRoadmapV41Manual(gateway, discordUserId, selected, interactionId) {
+export async function setRoadmapV41Manual(gateway, discordUserId, selected, interactionId, allowRoleFallback = false) {
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
 
   const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
   const activation = await gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`);
-  if (!activation && !tenure) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
+  if (!activation && !tenure && !allowRoleFallback) return { ok: false, message: "This Discord account is not in the known Dojo cohort." };
 
   const key = `${MANUAL_PREFIX}${userId}`;
   const previous = await gateway.ctx.storage.get(key);
@@ -588,8 +607,8 @@ export function buildRoadmapModel(state) {
   };
 }
 
-async function buildRoadmapView(userId, env, stub, allowPreview = false) {
-  const state = await stub.getRoadmapV41State(userId, allowPreview);
+async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRoleFallback = false) {
+  const state = await stub.getRoadmapV41State(userId, allowPreview, allowRoleFallback);
   if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
   const model = buildRoadmapModel(state);
 

@@ -5,6 +5,8 @@ on:
     paths:
       - 'slayerkey-dojo/**'
       - '.github/workflows/verify-production.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read

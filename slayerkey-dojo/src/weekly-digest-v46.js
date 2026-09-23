@@ -34,37 +34,56 @@ export async function buildWeeklyDigestModel(env, stub) {
     currentMembers: members,
     totals: totals || {},
     interventions: snapshot?.interventions || {},
+    taskStages: snapshot?.taskStages || {},
     now: new Date(),
   });
 }
 
 export function buildWeeklyDigestPayload(model, options = {}) {
   const members = Array.isArray(model?.members) ? model.members : [];
-  const both = members.filter((member) => !member.first_win_posted && Number(member.messages_last_7_days || 0) === 0);
-  const noWinActive = members.filter((member) => !member.first_win_posted && Number(member.messages_last_7_days || 0) > 0);
-  const winInactive = members.filter((member) => member.first_win_posted && Number(member.messages_last_7_days || 0) === 0);
-  const healthy = members.filter((member) => member.first_win_posted && Number(member.messages_last_7_days || 0) > 0);
+
+  const neverStarted = members.filter((member) => !member.any_message_observed);
+  const onboardedNotSocial = members.filter(
+    (member) =>
+      member.any_message_observed &&
+      !member.community_participated &&
+      !member.first_win_posted,
+  );
+  const lapsed = members.filter(
+    (member) =>
+      member.community_participated &&
+      Number(member.messages_last_7_days || 0) === 0,
+  );
+  const activeNoWin = members.filter(
+    (member) =>
+      member.community_participated &&
+      Number(member.messages_last_7_days || 0) > 0 &&
+      !member.first_win_posted,
+  );
+  const activated = members.filter((member) => member.first_win_posted);
 
   const fields = [{
-    name: "Overview",
+    name: "Activation Funnel",
     value: [
-      "**Current members:** " + members.length,
-      "✅ Win + ✅ 7d messages: **" + healthy.length + "**",
-      "❌ Win + ✅ 7d messages: **" + noWinActive.length + "**",
-      "✅ Win + ❌ 7d messages: **" + winInactive.length + "**",
-      "❌ Win + ❌ 7d messages: **" + both.length + "**",
+      `**Current members:** ${members.length}`,
+      `🚨 No tracked message ever: **${neverStarted.length}**`,
+      `👋 Onboarded, not in community: **${onboardedNotSocial.length}**`,
+      `💤 Participated before, 0 msgs / 7d: **${lapsed.length}**`,
+      `🏆 Active, no first win: **${activeNoWin.length}**`,
+      `✅ First win posted: **${activated.length}**`,
     ].join("\n"),
     inline: false,
   }];
 
-  appendDigestGroup(fields, "🚨 ❌ Win · ❌ 7d Messages", both);
-  appendDigestGroup(fields, "🏆 ❌ Win · ✅ 7d Messages", noWinActive);
-  appendDigestGroup(fields, "💤 ✅ Win · ❌ 7d Messages", winInactive);
+  appendDigestGroup(fields, "🚨 NO TRACKED MESSAGE EVER", neverStarted);
+  appendDigestGroup(fields, "👋 ONBOARDED · NOT IN COMMUNITY", onboardedNotSocial);
+  appendDigestGroup(fields, "💤 LAPSED · 0 MSGS / 7D", lapsed);
+  appendDigestGroup(fields, "🏆 ACTIVE · NO FIRST WIN", activeNoWin);
 
-  if (!both.length && !noWinActive.length && !winInactive.length) {
+  if (!neverStarted.length && !onboardedNotSocial.length && !lapsed.length && !activeNoWin.length) {
     fields.push({
       name: "✅ No members need a check",
-      value: "Every current member has posted a win and sent at least one tracked Discord message in the last 7 days.",
+      value: "Every current member has community participation, recent activity, and a tracked first win.",
       inline: false,
     });
   }
@@ -74,10 +93,11 @@ export function buildWeeklyDigestPayload(model, options = {}) {
     embeds: [{
       title: options.title || "📊 Weekly Digest",
       description: [
-        "**Who shows up here?**",
-        "A member is listed when **either** they have never posted a tracked win **or** they sent **0 tracked Discord messages** in the last 7 days.",
+        "**The funnel:** Onboarding → Community Participation → First Win",
         "",
-        "Legend: **🏆 Win** · **💬 7-day message activity**",
+        "**Community Participation** currently means a tracked message in General, Community Help, or Clips. Existing General history is backfilled; Help/Clips expand prospectively as members post.",
+        "",
+        "**No tracked message ever** means the bot has no message evidence from the tracked onboarding/activation history or live Dojo message tracking. It is intentionally phrased as “tracked,” not an absolute claim about every historical Discord message.",
       ].join("\n"),
       fields,
       footer: { text: options.footer || "Current Dojo members only." },
@@ -115,8 +135,32 @@ export function formatDigestMember(member) {
   else if (member?.display_name && !String(member.display_name).startsWith("Unknown member")) fallback = "`" + String(member.display_name).replace(/`/g, "") + "`";
   else if (id) fallback = "`Discord ID: " + id + "`";
   else fallback = "`Unresolved member`";
+
   const count = Math.max(0, Number(member?.messages_last_7_days || 0));
-  return "• " + mention + " · " + fallback + " · **" + count + " msg" + (count === 1 ? "" : "s") + "**";
+  const intro = member?.introduction_posted ? "✅" : "❌";
+  const community = member?.community_participated ? "✅" : "❌";
+  const win = member?.first_win_posted ? "✅" : "❌";
+  const stage = Number(member?.task_stage || 0);
+  const task = stage > 0 ? `#${stage}` : "—";
+
+  const responseLabels = {
+    community_still_improving: "Still improving",
+    snooze: "Hasn't played much",
+    stuck: "Stuck",
+    community_break: "Taking a break",
+  };
+  const response = responseLabels[member?.last_intervention] || null;
+
+  return [
+    "• " + mention,
+    fallback,
+    `Intro ${intro}`,
+    `Community ${community}`,
+    `Task ${task}`,
+    `Win ${win}`,
+    `7d **${count}**`,
+    response ? `Reply: **${response}**` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function chunkTextLines(lines, maxLength) {

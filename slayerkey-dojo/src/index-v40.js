@@ -3,7 +3,7 @@ import {
   applyActivationIntervention,
   attachOrganizerApplicationMessage,
   attachTeamApplicationMessage,
-  claimDailyDigestDate,
+  claimWeeklyDigestDate,
   claimV40CommandRegistration,
   completeOrganizerApplication,
   completeTeamApplication,
@@ -12,16 +12,16 @@ import {
   ensureV40CommandsOnce,
   failV40CommandRegistration,
   getActivationV40Snapshot,
-  getDailyDigestConfig,
+  getWeeklyDigestConfig,
   getPremierPublicCardConfig,
   getTeamApplicationConfig,
   handleV40Interaction,
   hydrateActivationIdentities,
   recordActivationCheckinWin,
-  releaseDailyDigestDate,
-  runDailyDigestScheduler,
+  releaseWeeklyDigestDate,
+  runWeeklyDigestScheduler,
   saveTeamApplicationDraft,
-  setDailyDigestConfig,
+  setWeeklyDigestConfig,
   setPremierPublicCardConfig,
   setTeamApplicationConfig,
   updateOrganizerApplicationStatus,
@@ -56,8 +56,8 @@ export default {
           commands: [
             "/activation-audit",
             "/activation-queue",
-            "/daily-digest",
-            "/daily-digest-setup",
+            "/weekly-digest",
+            "/weekly-digest-setup",
             "/activation-checkin-preview",
             "/wincheckin",
             "/teamapply",
@@ -83,14 +83,14 @@ export default {
     if (!stub) return;
     const tasks = [
       ensureV40CommandsOnce(env, stub),
-      runDailyDigestScheduler(env, stub),
+      runWeeklyDigestScheduler(env, stub),
     ];
     const settled = await Promise.allSettled(tasks);
     if (settled[0]?.status === "rejected") {
       console.error("v40 command registration failed:", settled[0].reason);
     }
     if (settled[1]?.status === "rejected") {
-      console.error("Daily Digest scheduler failed:", settled[1].reason);
+      console.error("Weekly Digest scheduler failed:", settled[1].reason);
     }
   },
 };
@@ -112,20 +112,20 @@ export class DiscordGateway extends DiscordGatewayV39 {
     return getActivationV40Snapshot(this);
   }
 
-  async setDailyDigestConfig(config) {
-    return setDailyDigestConfig(this, config);
+  async setWeeklyDigestConfig(config) {
+    return setWeeklyDigestConfig(this, config);
   }
 
-  async getDailyDigestConfig() {
-    return getDailyDigestConfig(this);
+  async getWeeklyDigestConfig() {
+    return getWeeklyDigestConfig(this);
   }
 
-  async claimDailyDigestDate(dateKey) {
-    return claimDailyDigestDate(this, dateKey);
+  async claimWeeklyDigestDate(dateKey) {
+    return claimWeeklyDigestDate(this, dateKey);
   }
 
-  async releaseDailyDigestDate(dateKey) {
-    return releaseDailyDigestDate(this, dateKey);
+  async releaseWeeklyDigestDate(dateKey) {
+    return releaseWeeklyDigestDate(this, dateKey);
   }
 
   async disableLegacyActivityReport() {

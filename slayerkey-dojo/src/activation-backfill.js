@@ -1,12 +1,14 @@
 import { ACTIVATION_DESTINATIONS, MEMBER_PREFIX, STORAGE_PREFIX, applyActivationMessage, mergeTenureIntoRecord, seedTenureRecords } from "./activation-core.js";
-import { identityFromMessage, mergeIdentityIntoRecord } from "./activation-v40-core.js";
+import { identityFromGuildMember, identityFromMessage, mergeIdentityIntoRecord } from "./activation-v40-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const BACKFILL_KEY = `${STORAGE_PREFIX}backfill`;
+const BACKFILL_VERSION = 4;
+const ROADMAP_CONFIG_KEY = "roadmap:v41:config";
 
 export async function beginActivationBackfill(gateway) {
   let state = await gateway.ctx.storage.get(BACKFILL_KEY);
-  if (!state || state.status === "complete") state = freshState();
+  if (!state || Number(state.version || 0) < BACKFILL_VERSION || state.status === "complete") state = freshState();
   else state = { ...state, status: "running", last_error: null, updated_at: new Date().toISOString() };
   await gateway.ctx.storage.put(BACKFILL_KEY, state);
   return state;
@@ -18,7 +20,13 @@ export async function getActivationBackfillStatus(gateway) {
 
 export async function processActivationBackfillBatch(gateway) {
   let state = await gateway.ctx.storage.get(BACKFILL_KEY);
-  if (!state || state.status !== "running") return state || null;
+  // v4 is a one-time automatic reconciliation. Older completed backfills did not
+  // seed every current Dojo-role member and therefore skipped their history.
+  if (!state || Number(state.version || 0) < BACKFILL_VERSION) {
+    state = freshState();
+    await gateway.ctx.storage.put(BACKFILL_KEY, state);
+  }
+  if (state.status !== "running") return state;
   const pauseUntil = Date.parse(state.rate_limit_until || "");
   if (Number.isFinite(pauseUntil) && pauseUntil > Date.now()) return state;
   if (state.rate_limit_until) state.rate_limit_until = null;
@@ -45,7 +53,10 @@ export async function processActivationBackfillBatch(gateway) {
 
 async function processUnit(gateway, state) {
   if (state.phase === "seed") {
-    state.seeded_members = await seedTenureRecords(gateway);
+    state.seeded_tenure_members = await seedTenureRecords(gateway);
+    state.seeded_role_members = await seedCurrentDojoRoleMembers(gateway);
+    state.seeded_members = Math.max(state.seeded_tenure_members, state.seeded_role_members);
+    state.destinations = await historicalDestinations(gateway);
     state.phase = "discover";
     state.updated_at = new Date().toISOString();
     await save(gateway, state);
@@ -59,12 +70,16 @@ async function processUnit(gateway, state) {
 }
 
 async function discoverSource(gateway, state) {
-  const destinations = Object.entries(ACTIVATION_DESTINATIONS);
+  const destinations = Array.isArray(state.destinations) && state.destinations.length
+    ? state.destinations
+    : Object.entries(ACTIVATION_DESTINATIONS).map(([key, id]) => ({ key, id: String(id) }));
   if (state.destination_index >= destinations.length) {
     state.phase = "scan"; state.source_index = 0; state.message_before = null; state.discovery = null;
     state.updated_at = new Date().toISOString(); await save(gateway, state); return state;
   }
-  const [destinationKey, destinationId] = destinations[state.destination_index];
+  const destination = destinations[state.destination_index];
+  const destinationKey = String(destination?.key || "");
+  const destinationId = String(destination?.id || "");
   if (!state.discovery) {
     const channel = await discordRequest(`${DISCORD_API}/channels/${destinationId}`, gateway.env);
     const type = Number(channel?.type);
@@ -116,19 +131,17 @@ async function scanSource(gateway, state) {
     // members merely because they posted in one of these Discord destinations.
     if (!record) continue;
 
-    let next = record;
-    if (!next.activation_started_at) {
-      next = mergeIdentityIntoRecord(next, identityFromMessage(message));
-      if (message.timestamp && (!next.unknown_anchor_activity_seen_at || Date.parse(message.timestamp) < Date.parse(next.unknown_anchor_activity_seen_at))) {
-        next = { ...next, unknown_anchor_activity_seen_at: new Date(message.timestamp).toISOString() };
-      }
-    } else {
-      next = applyActivationMessage(next, {
-        message,
-        destinationKey: source.destination_key,
-        threadOwnerId: source.thread_owner_id,
-        isThread: Boolean(source.parent_id),
-      });
+    let next = applyActivationMessage(record, {
+      message,
+      destinationKey: source.destination_key,
+      threadOwnerId: source.thread_owner_id,
+      isThread: Boolean(source.parent_id),
+      communitySource: ["community-help", "clips"].includes(String(source.destination_key || ""))
+        ? String(source.destination_key)
+        : null,
+    });
+    if (!next.activation_started_at && message.timestamp) {
+      next.unknown_anchor_activity_seen_at = earliestHistoricalIso(next.unknown_anchor_activity_seen_at, message.timestamp);
     }
     next.updated_at = new Date().toISOString();
     await gateway.ctx.storage.put(key, next);
@@ -164,10 +177,84 @@ async function observeRiotBatch(gateway, state) {
 
 function freshState() {
   const now = new Date().toISOString();
-  return { version: 3, status: "running", phase: "seed", destination_index: 0, discovery: null, sources: [], source_index: 0,
-    message_before: null, riot_index: 0, seeded_members: 0, processed_messages: 0, processed_sources: 0, rate_limit_until: null,
+  return { version: BACKFILL_VERSION, status: "running", phase: "seed", destination_index: 0, discovery: null, destinations: [], sources: [], source_index: 0,
+    message_before: null, riot_index: 0, seeded_members: 0, seeded_tenure_members: 0, seeded_role_members: 0,
+    processed_messages: 0, processed_sources: 0, rate_limit_until: null,
     last_error: null, started_at: now, completed_at: null, updated_at: now };
 }
+async function seedCurrentDojoRoleMembers(gateway) {
+  const env = gateway.env || {};
+  const guildId = String(env.DISCORD_GUILD_ID || "");
+  const dojoRoleId = String(env.DISCORD_DOJO_ROLE_ID || "");
+  if (!guildId || !dojoRoleId || !env.DISCORD_BOT_TOKEN) return 0;
+
+  let after = "0";
+  let count = 0;
+  while (true) {
+    const page = await discordRequest(
+      `${DISCORD_API}/guilds/${guildId}/members?limit=1000&after=${encodeURIComponent(after)}`,
+      env,
+    );
+    if (!Array.isArray(page)) break;
+    for (const member of page) {
+      const userId = String(member?.user?.id || "");
+      const roles = Array.isArray(member?.roles) ? member.roles.map(String) : [];
+      if (!userId || member?.user?.bot || !roles.includes(dojoRoleId)) continue;
+
+      const key = `${MEMBER_PREFIX}${userId}`;
+      const [current, tenure] = await Promise.all([
+        gateway.ctx.storage.get(key),
+        gateway.getTenureRecord?.(userId).catch(() => null),
+      ]);
+      let next = mergeTenureIntoRecord(current, userId, tenure);
+      next = mergeIdentityIntoRecord(next, identityFromGuildMember(member));
+      if (!tenure) {
+        next.membership_active = true;
+        next.cohort_source = next.cohort_source || "discord_dojo_role";
+      }
+      next.current_dojo_role_observed_at = new Date().toISOString();
+      if (member?.joined_at && Number.isFinite(Date.parse(member.joined_at))) {
+        next.discord_joined_at_evidence = new Date(member.joined_at).toISOString();
+      }
+      await gateway.ctx.storage.put(key, next);
+      count += 1;
+    }
+    if (page.length < 1000) break;
+    const last = String(page[page.length - 1]?.user?.id || "");
+    if (!last || last === after) break;
+    after = last;
+  }
+  return count;
+}
+
+async function historicalDestinations(gateway) {
+  const result = [];
+  const seen = new Set();
+  for (const [key, id] of Object.entries(ACTIVATION_DESTINATIONS)) {
+    const value = String(id || "");
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push({ key, id: value });
+  }
+
+  const config = await gateway.ctx.storage.get(ROADMAP_CONFIG_KEY).catch(() => null);
+  for (const key of ["community_help", "clips"]) {
+    const id = String(config?.channels?.[key] || "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ key: key.replace("_", "-"), id });
+  }
+  return result;
+}
+
+function earliestHistoricalIso(a, b) {
+  const av = a && Number.isFinite(Date.parse(a)) ? new Date(a).toISOString() : null;
+  const bv = b && Number.isFinite(Date.parse(b)) ? new Date(b).toISOString() : null;
+  if (!av) return bv;
+  if (!bv) return av;
+  return Date.parse(av) <= Date.parse(bv) ? av : bv;
+}
+
 function threadSource(thread, key, parent) { return { id: String(thread.id), destination_key: key, thread_owner_id: thread?.owner_id ? String(thread.owner_id) : null, parent_id: String(parent) }; }
 function addSource(state, source) { if (source?.id && !state.sources.some((s) => String(s.id) === String(source.id))) state.sources.push(source); }
 async function save(gateway, state) { await gateway.ctx.storage.put(BACKFILL_KEY, state); }
@@ -190,4 +277,4 @@ export function getRetryAfterMs(body, headers) {
 }
 function safeError(error) { return String(error?.message || error || "Unknown error").slice(0, 300); }
 
-export const __test = Object.freeze({ getRetryAfterMs });
+export const __test = Object.freeze({ getRetryAfterMs, historicalDestinations, seedCurrentDojoRoleMembers });

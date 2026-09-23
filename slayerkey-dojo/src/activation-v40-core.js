@@ -285,6 +285,12 @@ export function applyInterventionAction(previous, action, now = new Date().toISO
   } else if (action === "contacted_day3" || action === "contacted_day7") {
     next.status = action;
     next.snooze_until = null;
+  } else if (action === "community_still_improving") {
+    next.status = "still_improving";
+    next.snooze_until = null;
+  } else if (action === "community_break") {
+    next.status = "taking_break";
+    next.snooze_until = new Date(Date.parse(timestamp) + 30 * DAY_MS).toISOString();
   }
   return { state: next, duplicate: false };
 }

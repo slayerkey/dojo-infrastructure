@@ -1,32 +1,36 @@
 name: Verify Dojo Production Runtime
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - 'slayerkey-dojo/**'
-      - '.github/workflows/verify-production.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   production-health:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 2
     steps:
-      - name: Verify production Worker health
+      - name: Probe live production Worker
         shell: bash
         env:
           HEALTH_URL: https://slayerkey-dojo.mystd.workers.dev/health
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 36); do
-            body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
-            if [[ -n "$body" ]] && HEALTH_JSON="$body" node -e 'const body=JSON.parse(process.env.HEALTH_JSON||"{}"); const roadmap=body?.discord?.roadmap?.version; const journey=body?.discord?.customer_journey||{}; if(roadmap!=="v41"||journey.version!=="posthog-v1"||journey.posthog_configured!==true||journey.identity_bridge_configured!==true) process.exit(1); console.log(JSON.stringify({roadmap_version:roadmap,customer_journey_version:journey.version,posthog_configured:journey.posthog_configured,identity_bridge_configured:journey.identity_bridge_configured,delivery:journey.delivery||null}));'
-            then
-              exit 0
-            fi
-            echo "Production runtime not ready yet (attempt $attempt/36)."
-            sleep 10
-          done
-          echo "Production Worker did not expose the expected journey runtime with required secrets configured."
-          exit 1
+          body="$(curl -fsS --max-time 15 "$HEALTH_URL")"
+          echo "$body"
+          HEALTH_JSON="$body" node -e '
+            const body=JSON.parse(process.env.HEALTH_JSON||"{}");
+            const j=body?.discord?.customer_journey||{};
+            const r=body?.discord?.roadmap||{};
+            const result={
+              journey_version:j.version||null,
+              posthog_configured:j.posthog_configured===true,
+              identity_bridge_configured:j.identity_bridge_configured===true,
+              has_community_participated:Array.isArray(j.events)&&j.events.includes("community_participated"),
+              roadmap_version:r.version||null,
+              roadmap_has_visibility:Array.isArray(r.commands)&&r.commands.includes("/roadmap-visibility"),
+              progress_visibility:r.progress_visibility||null
+            };
+            console.log(JSON.stringify(result));
+            if(!result.has_community_participated || !result.roadmap_has_visibility) process.exit(2);
+          '

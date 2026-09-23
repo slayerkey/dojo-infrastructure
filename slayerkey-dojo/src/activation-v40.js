@@ -713,7 +713,9 @@ export async function getActivationV40Snapshot(gateway) {
     gateway.ctx.storage.list({ prefix: MEMBER_PREFIX }),
     gateway.listTenureRecords?.().catch(() => []),
     gateway.ctx.storage.list({ prefix: INTERVENTION_PREFIX }),
-    gateway.getTaskStageMapV47?.().catch(() => ({})),
+    typeof gateway.getTaskStageMapV47 === "function"
+      ? gateway.getTaskStageMapV47().catch(() => ({}))
+      : Promise.resolve({}),
   ]);
   const tenureById = new Map((Array.isArray(tenures) ? tenures : []).map((item) => [String(item?.discord_user_id || ""), item]));
   const records = [];

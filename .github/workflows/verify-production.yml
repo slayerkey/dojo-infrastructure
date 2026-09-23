@@ -16,17 +16,17 @@ jobs:
       - name: Verify production Worker health
         shell: bash
         env:
-          HEALTH_URL: https://dojo-rr-tracker.mystd.workers.dev/health
+          HEALTH_URL: https://slayerkey-dojo.mystd.workers.dev/health
         run: |
           set -euo pipefail
           for attempt in $(seq 1 36); do
             body="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
-            if [[ -n "$body" ]] && HEALTH_JSON="$body" node -e 'const body=JSON.parse(process.env.HEALTH_JSON||"{}"); const roadmap=body?.discord?.roadmap?.version; const journey=body?.discord?.customer_journey||{}; if(roadmap!=="v41"||journey.version!=="posthog-v1") process.exit(1); console.log(JSON.stringify({roadmap_version:roadmap,customer_journey_version:journey.version,posthog_configured:Boolean(journey.posthog_configured),identity_bridge_configured:Boolean(journey.identity_bridge_configured),delivery:journey.delivery||null}));'
+            if [[ -n "$body" ]] && HEALTH_JSON="$body" node -e 'const body=JSON.parse(process.env.HEALTH_JSON||"{}"); const roadmap=body?.discord?.roadmap?.version; const journey=body?.discord?.customer_journey||{}; if(roadmap!=="v41"||journey.version!=="posthog-v1"||journey.posthog_configured!==true||journey.identity_bridge_configured!==true) process.exit(1); console.log(JSON.stringify({roadmap_version:roadmap,customer_journey_version:journey.version,posthog_configured:journey.posthog_configured,identity_bridge_configured:journey.identity_bridge_configured,delivery:journey.delivery||null}));'
             then
               exit 0
             fi
-            echo "Production runtime not updated yet (attempt $attempt/36)."
+            echo "Production runtime not ready yet (attempt $attempt/36)."
             sleep 10
           done
-          echo "Production Worker did not expose the expected runtime version."
+          echo "Production Worker did not expose the expected journey runtime with required secrets configured."
           exit 1

@@ -231,7 +231,9 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
     gateway.ctx.storage.get(`${MANUAL_PREFIX}${userId}`),
     gateway.ctx.storage.get(`${TEAM_APPLICATION_PREFIX}${userId}`),
     gateway.ctx.storage.get(CONFIG_KEY),
-    gateway.getTaskStageV47?.(userId).catch(() => null),
+    typeof gateway.getTaskStageV47 === "function"
+      ? gateway.getTaskStageV47(userId).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   if (!activation && !tenure) {

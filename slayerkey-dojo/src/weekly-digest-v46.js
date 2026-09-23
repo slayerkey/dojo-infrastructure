@@ -56,6 +56,7 @@ export function buildWeeklyDigestPayload(model, options = {}) {
   );
   const activeNoWin = members.filter(
     (member) =>
+      member.community_participated &&
       Number(member.messages_last_7_days || 0) > 0 &&
       !member.first_win_posted,
   );

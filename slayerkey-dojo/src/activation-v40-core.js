@@ -105,6 +105,7 @@ export function buildActivationV40Model({
   }
 
   const queue = { day3: [], day7: [], stuck: [], dormant: [], attention: [] };
+  const members = [];
   let activatedWithinSeven = 0;
   let activationDenominator = 0;
   let everWin = 0;
@@ -145,6 +146,8 @@ export function buildActivationV40Model({
     const entry = {
       discord_user_id: userId,
       display_name: displayName,
+      username: currentIdentity?.username || record?.username || null,
+      global_name: currentIdentity?.global_name || record?.global_name || null,
       activation_started_at: anchor,
       days_since_activation: elapsedDays,
       first_training_post: Boolean(training),
@@ -158,6 +161,7 @@ export function buildActivationV40Model({
       snooze_until: intervention?.snooze_until || null,
     };
 
+    members.push(entry);
     if (snoozed) continue;
 
     const isStuck = !firstWin && intervention?.status === "stuck";
@@ -219,6 +223,7 @@ export function buildActivationV40Model({
     ever_posted_win: everWin,
     still_need_first_win: stillNeedFirstWin,
     engagement: activity,
+    members,
     queue,
     needs_action: {
       day3: queue.day3.length,

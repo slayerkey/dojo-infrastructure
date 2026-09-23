@@ -75,6 +75,28 @@ export const V40_COMMANDS = Object.freeze([
     }],
   },
   {
+    name: "community-nudge-preview",
+    description: "Preview the community re-engagement DM for one member",
+    type: 1,
+    options: [{
+      name: "member",
+      description: "Member to preview",
+      type: 6,
+      required: true,
+    }],
+  },
+  {
+    name: "community-nudge-send",
+    description: "Manually send the community re-engagement DM to one member",
+    type: 1,
+    options: [{
+      name: "member",
+      description: "Member to message",
+      type: 6,
+      required: true,
+    }],
+  },
+  {
     name: "wincheckin",
     description: "Tell the Dojo how your first-win progress is going",
     type: 1,
@@ -134,8 +156,9 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "task-stage-scan", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "task-stage-scan", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "community-nudge-preview", "community-nudge-send", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
+    customId.startsWith("actv47:nudge:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
     customId.startsWith("teamapp:v42:") ||
@@ -145,7 +168,8 @@ export async function handleV40Interaction(request, env, ctx) {
   if (!(await verifyDiscordSignature(request.headers, rawBody, env.DISCORD_PUBLIC_KEY))) {
     return new Response("Invalid request signature", { status: 401 });
   }
-  if (String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
+  const isCommunityNudgeDm = customId.startsWith("actv47:nudge:");
+  if (!isCommunityNudgeDm && String(interaction?.guild_id || "") !== String(env.DISCORD_GUILD_ID || "")) {
     return ephemeralMessage("This interaction only works in the Slayerkey Discord server.");
   }
 
@@ -231,6 +255,26 @@ export async function handleV40Interaction(request, env, ctx) {
   }
 
 
+  if (command === "community-nudge-preview" || command === "community-nudge-send") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can use community nudges.");
+    const targetId = String(getOption(interaction, "member") || "");
+    if (!targetId) return ephemeralMessage("Choose a member.");
+
+    if (command === "community-nudge-preview") {
+      ctx.waitUntil(
+        previewCommunityNudge(interaction, targetId, env, stub)
+          .catch((error) => failInteraction(interaction, env, "Community nudge preview failed", error)),
+      );
+      return deferredEphemeral();
+    }
+
+    ctx.waitUntil(
+      sendCommunityNudge(interaction, targetId, env, stub)
+        .catch((error) => failInteraction(interaction, env, "Community nudge send failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
   if (command === "activation-checkin-preview") {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can use this command.");
     const targetId = String(getOption(interaction, "member") || "");
@@ -292,6 +336,38 @@ export async function handleV40Interaction(request, env, ctx) {
   if (customId === "teamapp:v43:organizer") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to apply as a Premier Team Organizer.");
     return organizerApplicationModal();
+  }
+
+  if (customId.startsWith("actv47:nudge:")) {
+    const response = customId.split(":").pop();
+    const actionMap = {
+      improving: "community_still_improving",
+      notplaying: "snooze",
+      stuck: "stuck",
+      break: "community_break",
+    };
+    const action = actionMap[response];
+    if (!action) return ephemeralMessage("That response is not recognized.");
+
+    const result = await stub.applyActivationIntervention(userId, action, String(interaction.id || ""));
+    if (!result?.ok) return ephemeralMessage(result?.message || "I couldn't save that response.");
+
+    const reply = {
+      improving: "Got it — you're still working on it. Open the Dojo roadmap and pick up the next step when you're ready.",
+      notplaying: "Got it. I'll treat this as a play-time issue rather than an improvement issue for now.",
+      stuck: "Got it. You're marked as stuck so this can surface for coaching follow-up. Bring one specific problem to Weekly Group Coaching.",
+      break: "Thanks for letting us know. I'll record that you're taking a break so this isn't mistaken for being stuck.",
+    }[response];
+
+    return Response.json({
+      type: 7,
+      data: {
+        content: reply,
+        embeds: [],
+        components: [],
+        allowed_mentions: { parse: [] },
+      },
+    });
   }
 
   if (customId.startsWith("actv40:mark-sent:")) {
@@ -536,7 +612,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.4").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.5").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -559,9 +635,9 @@ export async function ensureV40CommandsOnce(env, stub) {
       }
     }
 
-    await stub.completeV40CommandRegistration("activation-v40.4");
+    await stub.completeV40CommandRegistration("activation-v40.5");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.4", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.5", safeError(error)).catch(() => {});
     throw error;
   }
 }

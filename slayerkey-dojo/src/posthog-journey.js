@@ -166,9 +166,10 @@ export async function handleCustomerIdentityBridge(request, env) {
     return Response.json({ ok: false, error: "Invalid bridge timestamp." }, { status: 401 });
   }
 
-  const bridgeSecret = env.DOJO_IDENTITY_BRIDGE_SECRET
-    ? String(env.DOJO_IDENTITY_BRIDGE_SECRET)
-    : await hmacSha256Hex(String(env.WHOP_WEBHOOK_SECRET || ""), "slayerkey-dojo-identity-bridge-v1");
+  const whopWebhookSecret = String(env.WHOP_WEBHOOK_SECRET || "").trim();
+  const bridgeSecret = whopWebhookSecret
+    ? await hmacSha256Hex(whopWebhookSecret, "slayerkey-dojo-identity-bridge-v1")
+    : String(env.DOJO_IDENTITY_BRIDGE_SECRET || "");
   const expected = await hmacSha256Hex(
     bridgeSecret,
     `${timestampHeader}.${rawBody}`,

@@ -692,10 +692,11 @@ export async function runWeeklyDigestScheduler(env, stub) {
 }
 
 export async function getActivationV40Snapshot(gateway) {
-  const [stored, tenures, interventionRows] = await Promise.all([
+  const [stored, tenures, interventionRows, taskStageRows] = await Promise.all([
     gateway.ctx.storage.list({ prefix: MEMBER_PREFIX }),
     gateway.listTenureRecords?.().catch(() => []),
     gateway.ctx.storage.list({ prefix: INTERVENTION_PREFIX }),
+    gateway.getTaskStageMapV47?.().catch(() => ({})),
   ]);
   const tenureById = new Map((Array.isArray(tenures) ? tenures : []).map((item) => [String(item?.discord_user_id || ""), item]));
   const records = [];
@@ -715,7 +716,7 @@ export async function getActivationV40Snapshot(gateway) {
   for (const [key, value] of interventionRows.entries()) {
     interventions[String(key).slice(INTERVENTION_PREFIX.length)] = value;
   }
-  return { records, interventions };
+  return { records, interventions, taskStages: taskStageRows || {} };
 }
 
 export async function hydrateActivationIdentities(gateway, identities) {
@@ -993,6 +994,7 @@ async function buildV40Runtime(env, stub) {
     currentMembers: members,
     totals: totals || {},
     interventions: snapshot?.interventions || {},
+    taskStages: snapshot?.taskStages || {},
     now: new Date(),
   });
   return { members, snapshot, totals, model };

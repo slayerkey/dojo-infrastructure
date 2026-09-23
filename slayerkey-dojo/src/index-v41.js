@@ -42,7 +42,7 @@ export default {
           identity: "whop-to-posthog-via-member-links",
           delivery: "scheduled-reconciliation",
           posthog_configured: Boolean(env.POSTHOG_PROJECT_TOKEN),
-          identity_bridge_configured: Boolean(env.DOJO_IDENTITY_BRIDGE_SECRET || env.WHOP_WEBHOOK_SECRET),
+          identity_bridge_configured: Boolean(env.DOJO_IDENTITY_BRIDGE_SECRET || env.WHOP_API_KEY),
           events: [
             "introduction_posted",
             "replied_to_two_members",

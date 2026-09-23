@@ -16,17 +16,17 @@ import {
   completeOrganizerApplication,
   completeTeamApplication,
   getActivationV40Snapshot,
-  getDailyDigestConfig,
+  getWeeklyDigestConfig,
   recordActivationCheckinWin,
   saveTeamApplicationDraft,
-  setDailyDigestConfig,
+  setWeeklyDigestConfig,
   updateOrganizerApplicationStatus,
   updateTeamApplicationStatus,
 } from "../src/activation-v40.js";
 import {
-  buildDailyDigestPayload,
+  buildWeeklyDigestPayload,
   formatDigestMember,
-} from "../src/daily-digest-v45.js";
+} from "../src/weekly-digest-v46.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
 
@@ -623,8 +623,8 @@ test("activation model exposes current members with username fallback for digest
   assert.equal(model.members[0].username, "visible_handle");
 });
 
-test("Daily Digest qualification is exactly no win OR zero 7-day messages", () => {
-  const payload = buildDailyDigestPayload({
+test("Weekly Digest qualification is exactly no win OR zero 7-day messages", () => {
+  const payload = buildWeeklyDigestPayload({
     members: [
       { discord_user_id: "1", username: "both", display_name: "Both", first_win_posted: false, messages_last_7_days: 0 },
       { discord_user_id: "2", username: "no_win", display_name: "No Win", first_win_posted: false, messages_last_7_days: 4 },
@@ -644,7 +644,7 @@ test("Daily Digest qualification is exactly no win OR zero 7-day messages", () =
   assert.equal(allGroupText.includes("<@4>"), false);
 });
 
-test("Daily Digest row includes a plain Discord handle fallback next to the clickable mention", () => {
+test("Weekly Digest row includes a plain Discord handle fallback next to the clickable mention", () => {
   const row = formatDigestMember({
     discord_user_id: "123",
     username: "fallback_handle",
@@ -656,7 +656,7 @@ test("Daily Digest row includes a plain Discord handle fallback next to the clic
   assert.match(row, /0 msgs/);
 });
 
-test("Daily Digest config migrates the old activity-report channel and disables the legacy report", async () => {
+test("Weekly Digest config migrates the old activity-report channel and disables the legacy report", async () => {
   const { values, storage } = mockStorage();
   let legacy = {
     enabled: true,
@@ -672,25 +672,61 @@ test("Daily Digest config migrates the old activity-report channel and disables 
     async setActivityConfig(next) { legacy = next; return { ok: true, config: next }; },
   };
 
-  const config = await getDailyDigestConfig(gateway);
+  const config = await getWeeklyDigestConfig(gateway);
   assert.equal(config.channel_id, "admin-channel");
+  assert.equal(config.weekday, 1);
   assert.equal(config.hour, 6);
   assert.equal(config.minute, 30);
-  assert.equal(config.migrated_from_activity_report, true);
+  assert.equal(config.migrated_from, "weekly_activity_report");
   assert.equal(legacy.enabled, false);
-  assert.equal(values.get("activation:v45:daily-digest-config").channel_id, "admin-channel");
+  assert.equal(values.get("activation:v46:weekly-digest-config").channel_id, "admin-channel");
 });
 
-test("Daily Digest setup persists a new daily channel/time", async () => {
+test("Weekly Digest setup persists a new weekly channel/day/time", async () => {
   const { values, storage } = mockStorage();
   const gateway = { ctx: { storage } };
-  const result = await setDailyDigestConfig(gateway, {
+  const result = await setWeeklyDigestConfig(gateway, {
     enabled: true,
     channel_id: "admin",
+    weekday: 2,
     hour: 9,
     minute: 15,
   });
   assert.equal(result.ok, true);
-  assert.equal(values.get("activation:v45:daily-digest-config").channel_id, "admin");
-  assert.equal(values.get("activation:v45:daily-digest-config").hour, 9);
+  assert.equal(values.get("activation:v46:weekly-digest-config").channel_id, "admin");
+  assert.equal(values.get("activation:v46:weekly-digest-config").weekday, 2);
+  assert.equal(values.get("activation:v46:weekly-digest-config").hour, 9);
+});
+
+
+test("Weekly Digest migration keeps the old weekly weekday/time even if a Daily Digest config exists", async () => {
+  const { values, storage } = mockStorage([
+    ["activation:v45:daily-digest-config", {
+      enabled: true,
+      channel_id: "new-admin-channel",
+      hour: 14,
+      minute: 5,
+      configured_at: "2026-09-22T21:05:00.000Z",
+    }],
+  ]);
+  let legacy = {
+    enabled: false,
+    channel_id: "old-admin-channel",
+    weekday: 1,
+    hour: 6,
+    minute: 0,
+    configured_at: "2026-09-14T13:00:00.000Z",
+  };
+  const gateway = {
+    ctx: { storage },
+    async getActivityConfig() { return legacy; },
+    async setActivityConfig(next) { legacy = next; return { ok: true }; },
+  };
+
+  const config = await getWeeklyDigestConfig(gateway);
+  assert.equal(config.channel_id, "new-admin-channel");
+  assert.equal(config.weekday, 1);
+  assert.equal(config.hour, 6);
+  assert.equal(config.minute, 0);
+  assert.equal(config.migrated_from, "weekly_activity_report");
 });

@@ -834,7 +834,7 @@ test("Weekly Digest member field puts labels above the check/X row and shows Mon
   assert.match(field.value, /✅/);
   assert.match(field.value, /❌/);
   assert.match(field.value, /Month 2/);
-  assert.match(field.value, /Reply: \*\*Taking a break\*\*/);
+  assert.match(field.value, /\*\*Reply:\*\* Taking a break/);
 });
 
 

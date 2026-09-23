@@ -761,3 +761,50 @@ test("activation model derives any-message and community participation from hist
   assert.equal(member.task_stage, 4);
   assert.equal(member.task_stage_label, "#4 - Daily Routine");
 });
+
+
+test("community nudge payload uses improvement pain point, response buttons, and roadmap link", () => {
+  const payload = v40.buildCommunityNudgePayload(
+    "Member",
+    { DISCORD_GUILD_ID: "guild" },
+    { guild_id: "guild", channels: { bots: "bots" } },
+    { disabled: false },
+  );
+  const embed = payload.embeds[0];
+  assert.match(embed.description, /improve and get closer to your goal rank/i);
+  assert.match(embed.description, /other players around you/i);
+  assert.deepEqual(
+    payload.components[0].components.map((button) => button.label),
+    ["Still improving", "Haven't played much", "I'm stuck", "Taking a break"],
+  );
+  assert.equal(payload.components[1].components[0].label, "View My Roadmap");
+  assert.equal(payload.components[1].components[0].url, "https://discord.com/channels/guild/bots");
+});
+
+test("community nudge responses persist useful states without enabling an automatic DM campaign", () => {
+  const improving = applyInterventionAction(null, "community_still_improving", "2026-09-10T00:00:00.000Z", "a");
+  assert.equal(improving.state.status, "still_improving");
+
+  const pause = applyInterventionAction(null, "community_break", "2026-09-10T00:00:00.000Z", "b");
+  assert.equal(pause.state.status, "taking_break");
+  assert.equal(pause.state.snooze_until, "2026-10-10T00:00:00.000Z");
+});
+
+test("Weekly Digest row includes intro, community, task stage, win and response in one compact line", () => {
+  const row = formatDigestMember({
+    discord_user_id: "123",
+    username: "member",
+    display_name: "Member",
+    introduction_posted: true,
+    community_participated: false,
+    task_stage: 4,
+    first_win_posted: false,
+    messages_last_7_days: 0,
+    last_intervention: "community_break",
+  });
+  assert.match(row, /Intro ✅/);
+  assert.match(row, /Community ❌/);
+  assert.match(row, /Task #4/);
+  assert.match(row, /Win ❌/);
+  assert.match(row, /Reply: \*\*Taking a break\*\*/);
+});

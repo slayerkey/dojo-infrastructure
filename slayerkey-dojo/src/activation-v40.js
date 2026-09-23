@@ -541,6 +541,89 @@ export async function failV40CommandRegistration(gateway, version, error) {
   });
 }
 
+export async function setDailyDigestConfig(gateway, config) {
+  const next = {
+    ...(config || {}),
+    enabled: config?.enabled !== false,
+    channel_id: String(config?.channel_id || ""),
+    hour: Number(config?.hour || 0),
+    minute: Number(config?.minute || 0),
+    updated_at: new Date().toISOString(),
+  };
+  await gateway.ctx.storage.put(DAILY_DIGEST_CONFIG_KEY, next);
+  return { ok: true, config: next };
+}
+
+export async function getDailyDigestConfig(gateway) {
+  const current = await gateway.ctx.storage.get(DAILY_DIGEST_CONFIG_KEY);
+  if (current?.channel_id) return current;
+
+  // If the older weekly activity report was configured, migrate its channel/time
+  // once so the new Daily Digest starts working without another setup step.
+  const legacy = await gateway.getActivityConfig?.().catch(() => null);
+  if (legacy?.enabled && legacy?.channel_id) {
+    const migrated = {
+      enabled: true,
+      channel_id: String(legacy.channel_id),
+      hour: Number(legacy.hour || 0),
+      minute: Number(legacy.minute || 0),
+      migrated_from_activity_report: true,
+      configured_at: legacy.configured_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    await gateway.ctx.storage.put(DAILY_DIGEST_CONFIG_KEY, migrated);
+    await gateway.setActivityConfig?.({ ...legacy, enabled: false }).catch(() => {});
+    return migrated;
+  }
+  return current || null;
+}
+
+export async function disableLegacyActivityReport(gateway) {
+  const legacy = await gateway.getActivityConfig?.().catch(() => null);
+  if (!legacy?.enabled) return { ok: true, changed: false };
+  await gateway.setActivityConfig?.({ ...legacy, enabled: false });
+  return { ok: true, changed: true };
+}
+
+export async function claimDailyDigestDate(gateway, dateKey) {
+  const day = String(dateKey || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const current = await gateway.ctx.storage.get(DAILY_DIGEST_LAST_DATE_KEY);
+  if (String(current || "") === day) return false;
+  await gateway.ctx.storage.put(DAILY_DIGEST_LAST_DATE_KEY, day);
+  return true;
+}
+
+export async function releaseDailyDigestDate(gateway, dateKey) {
+  const current = await gateway.ctx.storage.get(DAILY_DIGEST_LAST_DATE_KEY);
+  if (String(current || "") === String(dateKey || "")) {
+    await gateway.ctx.storage.delete(DAILY_DIGEST_LAST_DATE_KEY);
+  }
+  return true;
+}
+
+export async function runDailyDigestScheduler(env, stub) {
+  if (!stub || !env.DISCORD_BOT_TOKEN || !env.DISCORD_GUILD_ID) return;
+  const config = await stub.getDailyDigestConfig().catch(() => null);
+  if (!config?.enabled || !config?.channel_id) return;
+
+  const now = new Date();
+  const local = phoenixClockParts(now);
+  if (Number(config.hour) !== local.hour || Number(config.minute) !== local.minute) return;
+
+  const today = phoenixDateKey(now);
+  const claimed = await stub.claimDailyDigestDate(today).catch(() => false);
+  if (!claimed) return;
+
+  try {
+    await postDailyDigest(env, stub, String(config.channel_id), { manual: false });
+  } catch (error) {
+    await stub.releaseDailyDigestDate(today).catch(() => {});
+    console.error("Daily Digest failed:", error);
+    throw error;
+  }
+}
+
 export async function getActivationV40Snapshot(gateway) {
   const [stored, tenures, interventionRows] = await Promise.all([
     gateway.ctx.storage.list({ prefix: MEMBER_PREFIX }),

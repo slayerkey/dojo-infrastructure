@@ -171,7 +171,7 @@ export function buildActivationV40Model({
       first_general_message: Boolean(general),
       community_participated: Boolean(firstCommunity),
       community_participated_at: firstCommunity,
-      any_message_observed: Boolean(firstAnyMessage),
+      any_message_observed: Boolean(firstAnyMessage || activityCount > 0 || Number(taskStage?.stage || 0) > 0),
       first_any_message_at: firstAnyMessage,
       goal_posted: Boolean(goal),
       first_win_posted: Boolean(firstWin),

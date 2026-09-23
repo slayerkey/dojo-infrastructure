@@ -564,7 +564,10 @@ export async function getDailyDigestConfig(gateway) {
 
   // If the older weekly activity report was configured, migrate its channel/time
   // once so the new Daily Digest starts working without another setup step.
-  const legacy = await gateway.getActivityConfig?.().catch(() => null);
+  let legacy = null;
+  if (typeof gateway.getActivityConfig === "function") {
+    legacy = await gateway.getActivityConfig().catch(() => null);
+  }
   if (legacy?.enabled && legacy?.channel_id) {
     const migrated = {
       enabled: true,
@@ -576,16 +579,21 @@ export async function getDailyDigestConfig(gateway) {
       updated_at: new Date().toISOString(),
     };
     await gateway.ctx.storage.put(DAILY_DIGEST_CONFIG_KEY, migrated);
-    await gateway.setActivityConfig?.({ ...legacy, enabled: false }).catch(() => {});
+    if (typeof gateway.setActivityConfig === "function") {
+      await gateway.setActivityConfig({ ...legacy, enabled: false }).catch(() => {});
+    }
     return migrated;
   }
   return current || null;
 }
 
 export async function disableLegacyActivityReport(gateway) {
-  const legacy = await gateway.getActivityConfig?.().catch(() => null);
+  if (typeof gateway.getActivityConfig !== "function" || typeof gateway.setActivityConfig !== "function") {
+    return { ok: true, changed: false };
+  }
+  const legacy = await gateway.getActivityConfig().catch(() => null);
   if (!legacy?.enabled) return { ok: true, changed: false };
-  await gateway.setActivityConfig?.({ ...legacy, enabled: false });
+  await gateway.setActivityConfig({ ...legacy, enabled: false });
   return { ok: true, changed: true };
 }
 

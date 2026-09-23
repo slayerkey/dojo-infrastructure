@@ -1081,7 +1081,9 @@ async function resolveNudgeMember(targetId, env, stub) {
   const [member, snapshot, config] = await Promise.all([
     discordJson(`${DISCORD_API}/guilds/${env.DISCORD_GUILD_ID}/members/${targetId}`, env).catch(() => null),
     stub.getActivationV40Snapshot().catch(() => null),
-    stub.getRoadmapV41Config?.().catch(() => null),
+    typeof stub.getRoadmapV41Config === "function"
+      ? stub.getRoadmapV41Config().catch(() => null)
+      : Promise.resolve(null),
   ]);
   const stored = (snapshot?.records || []).find((record) => String(record?.discord_user_id || "") === String(targetId || ""));
   const currentIdentity = member ? identityFromGuildMember(member) : null;

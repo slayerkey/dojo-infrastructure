@@ -1,5 +1,12 @@
 import legacy, { DiscordGateway as DiscordGatewayV40 } from "./index-v40.js";
 import {
+  getTaskStageMapV47,
+  getTaskStageV47,
+  observeTaskThreadV47,
+  observeV47Message,
+  scanTaskStagesV47,
+} from "./community-activation-v47.js";
+import {
   handleCustomerIdentityBridge,
   syncActivationPosthogBatch,
 } from "./posthog-journey.js";
@@ -93,6 +100,36 @@ export default {
 };
 
 export class DiscordGateway extends DiscordGatewayV40 {
+  async handleGatewayMessage(raw) {
+    let payload = null;
+    try {
+      payload = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
+    } catch {}
+
+    try {
+      if (
+        payload?.op === 0 &&
+        payload?.t === "MESSAGE_CREATE" &&
+        String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "") &&
+        !payload?.d?.author?.bot
+      ) {
+        await observeV47Message(this, payload.d);
+      }
+
+      if (
+        payload?.op === 0 &&
+        (payload?.t === "THREAD_CREATE" || payload?.t === "THREAD_UPDATE") &&
+        String(payload?.d?.guild_id || "") === String(this.env.DISCORD_GUILD_ID || "")
+      ) {
+        await observeTaskThreadV47(this, payload.d);
+      }
+    } catch (error) {
+      console.error("v47 community/task tracking failed without blocking legacy handling:", error);
+    }
+
+    return super.handleGatewayMessage(raw);
+  }
+
   async syncActivationPosthogBatch() {
     return syncActivationPosthogBatch(this);
   }
@@ -123,5 +160,17 @@ export class DiscordGateway extends DiscordGatewayV40 {
 
   async getRoadmapV41Config() {
     return getRoadmapV41Config(this);
+  }
+
+  async scanTaskStagesV47() {
+    return scanTaskStagesV47(this);
+  }
+
+  async getTaskStageMapV47() {
+    return getTaskStageMapV47(this);
+  }
+
+  async getTaskStageV47(discordUserId) {
+    return getTaskStageV47(this, discordUserId);
   }
 }

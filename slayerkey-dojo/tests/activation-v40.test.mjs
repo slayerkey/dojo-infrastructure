@@ -16,11 +16,17 @@ import {
   completeOrganizerApplication,
   completeTeamApplication,
   getActivationV40Snapshot,
+  getDailyDigestConfig,
   recordActivationCheckinWin,
   saveTeamApplicationDraft,
+  setDailyDigestConfig,
   updateOrganizerApplicationStatus,
   updateTeamApplicationStatus,
 } from "../src/activation-v40.js";
+import {
+  buildDailyDigestPayload,
+  formatDigestMember,
+} from "../src/daily-digest-v45.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
 
@@ -602,4 +608,89 @@ test("organizer decline reason is stored", async () => {
   assert.equal(updated.ok, true);
   assert.equal(updated.application.status, "declined");
   assert.equal(updated.application.decision_reason, "Need more availability.");
+});
+
+
+test("activation model exposes current members with username fallback for digest rows", () => {
+  const model = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100", { nick: "Visible Name", username: "visible_handle" })],
+    totals: { "100": 0 },
+    now: new Date(Date.parse(anchor) + 8 * DAY_MS),
+  });
+  assert.equal(model.members.length, 1);
+  assert.equal(model.members[0].display_name, "Visible Name");
+  assert.equal(model.members[0].username, "visible_handle");
+});
+
+test("Daily Digest qualification is exactly no win OR zero 7-day messages", () => {
+  const payload = buildDailyDigestPayload({
+    members: [
+      { discord_user_id: "1", username: "both", display_name: "Both", first_win_posted: false, messages_last_7_days: 0 },
+      { discord_user_id: "2", username: "no_win", display_name: "No Win", first_win_posted: false, messages_last_7_days: 4 },
+      { discord_user_id: "3", username: "inactive", display_name: "Inactive", first_win_posted: true, messages_last_7_days: 0 },
+      { discord_user_id: "4", username: "healthy", display_name: "Healthy", first_win_posted: true, messages_last_7_days: 7 },
+    ],
+  });
+
+  const embed = payload.embeds[0];
+  assert.match(embed.description, /either/);
+  assert.match(embed.fields[0].value, /Win \+ ✅ 7d messages: \*\*1\*\*/);
+  assert.match(embed.fields[0].value, /❌ Win \+ ❌ 7d messages: \*\*1\*\*/);
+  const allGroupText = embed.fields.slice(1).map((field) => field.value).join("\n");
+  assert.match(allGroupText, /<@1>/);
+  assert.match(allGroupText, /<@2>/);
+  assert.match(allGroupText, /<@3>/);
+  assert.equal(allGroupText.includes("<@4>"), false);
+});
+
+test("Daily Digest row includes a plain Discord handle fallback next to the clickable mention", () => {
+  const row = formatDigestMember({
+    discord_user_id: "123",
+    username: "fallback_handle",
+    display_name: "Fallback",
+    messages_last_7_days: 0,
+  });
+  assert.match(row, /<@123>/);
+  assert.match(row, /@fallback_handle/);
+  assert.match(row, /0 msgs/);
+});
+
+test("Daily Digest config migrates the old activity-report channel and disables the legacy report", async () => {
+  const { values, storage } = mockStorage();
+  let legacy = {
+    enabled: true,
+    channel_id: "admin-channel",
+    hour: 6,
+    minute: 30,
+    weekday: 1,
+    configured_at: "2026-09-20T13:30:00.000Z",
+  };
+  const gateway = {
+    ctx: { storage },
+    async getActivityConfig() { return legacy; },
+    async setActivityConfig(next) { legacy = next; return { ok: true, config: next }; },
+  };
+
+  const config = await getDailyDigestConfig(gateway);
+  assert.equal(config.channel_id, "admin-channel");
+  assert.equal(config.hour, 6);
+  assert.equal(config.minute, 30);
+  assert.equal(config.migrated_from_activity_report, true);
+  assert.equal(legacy.enabled, false);
+  assert.equal(values.get("activation:v45:daily-digest-config").channel_id, "admin-channel");
+});
+
+test("Daily Digest setup persists a new daily channel/time", async () => {
+  const { values, storage } = mockStorage();
+  const gateway = { ctx: { storage } };
+  const result = await setDailyDigestConfig(gateway, {
+    enabled: true,
+    channel_id: "admin",
+    hour: 9,
+    minute: 15,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(values.get("activation:v45:daily-digest-config").channel_id, "admin");
+  assert.equal(values.get("activation:v45:daily-digest-config").hour, 9);
 });

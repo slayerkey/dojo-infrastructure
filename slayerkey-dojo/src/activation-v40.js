@@ -44,7 +44,7 @@ const FIRST_WIN_CHECKIN_PROMPT =
 export const V40_COMMANDS = Object.freeze([
   {
     name: "activation-queue",
-    description: "Show current Dojo members who need activation help",
+    description: "Show the clean Dojo Daily Digest member table",
     type: 1,
   },
   {
@@ -1114,11 +1114,11 @@ function formatV40Audit(model) {
     `**0 messages:** ${model.engagement.zero}`,
     "",
     "### NEEDS ACTION",
-    `**7+ days without a first win:** ${model.needs_action.day7}`,
-    `**0 messages in the last 7 days:** ${model.needs_action.dormant}`,
-    `**Early no-win (days 3–6):** ${model.needs_action.day3}`,
+    `**No first win:** ${model.still_need_first_win}`,
+    `**0 messages in the last 7 days:** ${model.engagement.zero}`,
+    `**Both:** ${(model.members || []).filter((member) => !member.first_win_posted && Number(member.messages_last_7_days || 0) === 0).length}`,
     "",
-    "_No-win and zero-message groups can overlap. Use /activation-queue for clickable member profiles._",
+    "_Needs check = no first win OR 0 messages in the previous 7 completed Arizona days. Use /activation-queue for the clean member table._",
   ].filter(Boolean).join("\n").slice(0, 1950);
 }
 

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   FUNDAMENTALS_URL,
   ONBOARDING_URL,
+  ROADMAP_COMMANDS,
   __test as roadmap,
   getRoadmapV41State,
 } from "../src/roadmap-v41.js";
@@ -50,6 +51,23 @@ test("channel resolver handles emoji-prefixed Discord channel names", () => {
   assert.equal(result.channels.clips, "9");
   assert.equal(result.channels.community_help, "10");
   assert.deepEqual(result.unresolved, []);
+});
+
+
+
+test("channel resolver never prefers old-introductions over the live introductions channel", () => {
+  const result = roadmap.resolveRoadmapChannels([
+    { id: "old", type: 15, name: "old-introductions" },
+    { id: "live", type: 15, name: "👋┃introductions" },
+  ], "guild");
+
+  assert.equal(result.channels.introductions, "live");
+  assert.equal(roadmap.roadmapChannelMatchScore("old-introductions", ["introductions"]), 0);
+  assert.equal(roadmap.roadmapChannelMatchScore("👋┃introductions", ["introductions"]), 100);
+});
+
+test("roadmap-preview is registered as an owner verification command", () => {
+  assert.equal(ROADMAP_COMMANDS.some((command) => command.name === "roadmap-preview"), true);
 });
 
 test("roadmap preserves the exact Whop onboarding and Fundamentals links", () => {

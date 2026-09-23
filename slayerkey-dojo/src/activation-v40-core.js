@@ -116,26 +116,50 @@ export function buildActivationV40Model({
   for (const [userId, currentIdentity] of currentIdentities) {
     const record = recordById.get(userId) || { discord_user_id: userId };
     const anchor = validIso(record.activation_started_at) ? new Date(record.activation_started_at).toISOString() : null;
-    const firstWin = qualifiedAt(record.first_win_at, anchor);
-    const intro = qualifiedAt(record.introduction_at, anchor);
-    const replies = qualifiedAt(record.replied_to_two_members_at, anchor);
-    const training = qualifiedAt(record.first_training_post_at, anchor);
-    const general = qualifiedAt(record.first_general_message_at, anchor);
-    const goal = qualifiedAt(record.first_goal_at, anchor);
-    const firstCommunity = earliestObserved(record.first_community_message_at, record.first_general_message_at);
-    const firstAnyMessage = earliestObserved(
-      record.first_any_message_at,
-      record.introduction_at,
-      record.replied_to_two_members_at,
-      record.first_training_post_at,
-      record.first_general_message_at,
-      record.first_goal_at,
-      record.first_win_at,
-    );
+    const timedFirstWin = qualifiedAt(record.first_win_at, anchor);
+    const timedIntro = qualifiedAt(record.introduction_at, anchor);
+    const timedReplies = qualifiedAt(record.replied_to_two_members_at, anchor);
+    const timedTraining = qualifiedAt(record.first_training_post_at, anchor);
+    const timedGeneral = qualifiedAt(record.first_general_message_at, anchor);
+    const timedGoal = qualifiedAt(record.first_goal_at, anchor);
     const taskStage = taskStages?.[userId] || null;
+
+    // Members with a known activation anchor keep strict post-membership metrics.
+    // Older role-verified members with no recoverable anchor use separately stored
+    // historical evidence for factual UX only.
+    const intro = anchor ? timedIntro : earliestObserved(record.observed_introduction_at, record.introduction_at);
+    const replies = anchor ? timedReplies : earliestObserved(record.observed_replied_to_two_members_at, record.replied_to_two_members_at);
+    const training = anchor
+      ? (timedTraining || (Number(taskStage?.stage || 0) > 0 ? (taskStage.observed_at || record.first_training_post_at || new Date(safeNowMs).toISOString()) : null))
+      : earliestObserved(
+          record.observed_training_post_at,
+          record.first_training_post_at,
+          Number(taskStage?.stage || 0) > 0 ? (taskStage.observed_at || new Date(safeNowMs).toISOString()) : null,
+        );
+    const general = anchor ? timedGeneral : earliestObserved(record.observed_general_message_at, record.first_general_message_at);
+    const goal = anchor ? timedGoal : earliestObserved(record.observed_goal_at, record.first_goal_at);
+    const firstWin = anchor ? timedFirstWin : earliestObserved(record.observed_win_at, record.first_win_at);
+    const firstCommunity = anchor
+      ? earliestObserved(record.first_community_message_at, timedGeneral)
+      : earliestObserved(
+          record.observed_community_message_at,
+          record.observed_general_message_at,
+          record.first_community_message_at,
+          record.first_general_message_at,
+        );
+    const firstAnyMessage = earliestObserved(
+      record.observed_any_message_at,
+      record.first_any_message_at,
+      intro,
+      replies,
+      training,
+      general,
+      goal,
+      firstWin,
+    );
     const elapsedMs = anchor ? Math.max(0, safeNowMs - Date.parse(anchor)) : null;
     const elapsedDays = Number.isFinite(elapsedMs) ? Math.floor(elapsedMs / DAY_MS) : null;
-    const withinSeven = Boolean(firstWin && Date.parse(firstWin) <= Date.parse(anchor) + 7 * DAY_MS);
+    const withinSeven = Boolean(anchor && timedFirstWin && Date.parse(timedFirstWin) <= Date.parse(anchor) + 7 * DAY_MS);
     const activityCount = Number(activity.by_user[userId] || 0);
     const intervention = interventions?.[userId] || null;
     const snoozed = Boolean(

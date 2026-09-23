@@ -153,7 +153,7 @@ export async function handleCustomerIdentityBridge(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "POST required." }, { status: 405 });
   }
-  if ((!env.DOJO_IDENTITY_BRIDGE_SECRET && !env.WHOP_WEBHOOK_SECRET) || !env.MEMBER_LINKS) {
+  if ((!env.DOJO_IDENTITY_BRIDGE_SECRET && !env.WHOP_API_KEY) || !env.MEMBER_LINKS) {
     return Response.json({ ok: false, error: "Identity bridge is not configured." }, { status: 503 });
   }
 
@@ -166,9 +166,9 @@ export async function handleCustomerIdentityBridge(request, env) {
     return Response.json({ ok: false, error: "Invalid bridge timestamp." }, { status: 401 });
   }
 
-  const whopWebhookSecret = String(env.WHOP_WEBHOOK_SECRET || "").trim();
-  const bridgeSecret = whopWebhookSecret
-    ? await hmacSha256Hex(whopWebhookSecret, "slayerkey-dojo-identity-bridge-v1")
+  const whopApiKey = String(env.WHOP_API_KEY || "").trim();
+  const bridgeSecret = whopApiKey
+    ? await hmacSha256Hex(whopApiKey, "slayerkey-dojo-identity-bridge-v1")
     : String(env.DOJO_IDENTITY_BRIDGE_SECRET || "");
   const expected = await hmacSha256Hex(
     bridgeSecret,

@@ -176,8 +176,10 @@ export async function handleCustomerIdentityBridge(request, env) {
   }
 
   let verifiedBy = "";
+  let attemptedDedicatedSignature = false;
   const dedicatedSecret = String(env.DOJO_IDENTITY_BRIDGE_SECRET || "").trim();
   if (dedicatedSecret && timestampHeader && signatureHeader) {
+    attemptedDedicatedSignature = true;
     const timestampSeconds = Number(timestampHeader);
     if (
       Number.isFinite(timestampSeconds) &&
@@ -195,6 +197,9 @@ export async function handleCustomerIdentityBridge(request, env) {
   }
 
   if (!verifiedBy) {
+    if (attemptedDedicatedSignature && !String(env.WHOP_API_KEY || "").trim()) {
+      return Response.json({ ok: false, error: "Invalid bridge signature." }, { status: 401 });
+    }
     const proof = await verifyWhopPaymentIdentityProof(
       env,
       paymentId,

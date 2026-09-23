@@ -88,6 +88,7 @@ export function buildActivationV40Model({
   currentMembers = [],
   totals = {},
   interventions = {},
+  taskStages = {},
   now = new Date(),
 } = {}) {
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
@@ -116,8 +117,22 @@ export function buildActivationV40Model({
     const record = recordById.get(userId) || { discord_user_id: userId };
     const anchor = validIso(record.activation_started_at) ? new Date(record.activation_started_at).toISOString() : null;
     const firstWin = qualifiedAt(record.first_win_at, anchor);
+    const intro = qualifiedAt(record.introduction_at, anchor);
+    const replies = qualifiedAt(record.replied_to_two_members_at, anchor);
     const training = qualifiedAt(record.first_training_post_at, anchor);
+    const general = qualifiedAt(record.first_general_message_at, anchor);
     const goal = qualifiedAt(record.first_goal_at, anchor);
+    const firstCommunity = earliestObserved(record.first_community_message_at, record.first_general_message_at);
+    const firstAnyMessage = earliestObserved(
+      record.first_any_message_at,
+      record.introduction_at,
+      record.replied_to_two_members_at,
+      record.first_training_post_at,
+      record.first_general_message_at,
+      record.first_goal_at,
+      record.first_win_at,
+    );
+    const taskStage = taskStages?.[userId] || null;
     const elapsedMs = anchor ? Math.max(0, safeNowMs - Date.parse(anchor)) : null;
     const elapsedDays = Number.isFinite(elapsedMs) ? Math.floor(elapsedMs / DAY_MS) : null;
     const withinSeven = Boolean(firstWin && Date.parse(firstWin) <= Date.parse(anchor) + 7 * DAY_MS);
@@ -150,11 +165,20 @@ export function buildActivationV40Model({
       global_name: currentIdentity?.global_name || record?.global_name || null,
       activation_started_at: anchor,
       days_since_activation: elapsedDays,
+      introduction_posted: Boolean(intro),
+      replied_to_two_members: Boolean(replies),
       first_training_post: Boolean(training),
+      first_general_message: Boolean(general),
+      community_participated: Boolean(firstCommunity),
+      community_participated_at: firstCommunity,
+      any_message_observed: Boolean(firstAnyMessage),
+      first_any_message_at: firstAnyMessage,
       goal_posted: Boolean(goal),
       first_win_posted: Boolean(firstWin),
       first_win_within_7_days: withinSeven,
       messages_last_7_days: activityCount,
+      task_stage: taskStage?.stage || null,
+      task_stage_label: taskStage?.label || null,
       last_intervention: intervention?.last_action || null,
       last_intervention_at: intervention?.last_intervention_at || null,
       status: intervention?.status || null,
@@ -260,6 +284,12 @@ export function applyInterventionAction(previous, action, now = new Date().toISO
   } else if (action === "contacted_day3" || action === "contacted_day7") {
     next.status = action;
     next.snooze_until = null;
+  } else if (action === "community_still_improving") {
+    next.status = "still_improving";
+    next.snooze_until = null;
+  } else if (action === "community_break") {
+    next.status = "taking_break";
+    next.snooze_until = new Date(Date.parse(timestamp) + 30 * DAY_MS).toISOString();
   }
   return { state: next, duplicate: false };
 }
@@ -344,6 +374,14 @@ function qualifiedAt(value, anchor) {
   if (!validIso(value) || !validIso(anchor)) return null;
   if (Date.parse(value) < Date.parse(anchor)) return null;
   return new Date(value).toISOString();
+}
+
+function earliestObserved(...values) {
+  const candidates = values
+    .filter(validIso)
+    .map((value) => new Date(value).toISOString())
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return candidates[0] || null;
 }
 
 function clean(value) {

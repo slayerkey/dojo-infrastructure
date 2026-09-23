@@ -817,6 +817,23 @@ test("community nudge responses persist useful states without enabling an automa
   assert.equal(pause.state.snooze_until, "2026-10-10T00:00:00.000Z");
 });
 
+test("Weekly Digest includes a detailed first-win bucket", () => {
+  const payload = buildWeeklyDigestPayload({
+    members: [{
+      discord_user_id: "321",
+      username: "winner",
+      display_name: "Winner",
+      introduction_posted: true,
+      community_participated: true,
+      task_stage: 9,
+      task_stage_label: "Month 2 - DM Review",
+      first_win_posted: true,
+      messages_last_7_days: 3,
+    }],
+  });
+  assert.equal(payload.embeds.some((embed) => /FIRST WIN POSTED/.test(String(embed?.title || ""))), true);
+});
+
 test("Weekly Digest member field puts labels above the check/X row and shows Month 2 clearly", () => {
   const field = buildDigestMemberField({
     discord_user_id: "123",

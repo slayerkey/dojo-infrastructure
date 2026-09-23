@@ -26,6 +26,8 @@ const TEAM_DRAFT_PREFIX = "teamapp:v40:draft:";
 const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
 const ORGANIZER_APPLICATION_PREFIX = "teamapp:v43:organizer:";
 const TEAM_PUBLIC_CARD_KEY = "teamapp:v41:public-card";
+const DAILY_DIGEST_CONFIG_KEY = "activation:v45:daily-digest-config";
+const DAILY_DIGEST_LAST_DATE_KEY = "activation:v45:daily-digest-last-date";
 const PREMIER_INFO_MESSAGE_URL = "https://discord.com/channels/1494446702378221590/1529539108597268510/1529545999889072322";
 const encoder = new TextEncoder();
 
@@ -39,6 +41,16 @@ export const V40_COMMANDS = Object.freeze([
   {
     name: "activation-queue",
     description: "Show current Dojo members who need activation help",
+    type: 1,
+  },
+  {
+    name: "daily-digest",
+    description: "Post the clean Dojo Daily Digest now",
+    type: 1,
+  },
+  {
+    name: "daily-digest-setup",
+    description: "Post the Dojo Daily Digest here every day at this time",
     type: 1,
   },
   {
@@ -112,7 +124,7 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
@@ -142,6 +154,33 @@ export async function handleV40Interaction(request, env, ctx) {
     ctx.waitUntil(runV40Queue(interaction, env, stub).catch((error) => failInteraction(interaction, env, "Activation queue failed", error)));
     return deferredEphemeral();
   }
+  if (command === "daily-digest-setup") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can configure the Daily Digest.");
+    const local = phoenixClockParts(new Date());
+    const config = await stub.setDailyDigestConfig({
+      enabled: true,
+      channel_id: String(interaction.channel_id || ""),
+      hour: local.hour,
+      minute: local.minute,
+      configured_at: new Date().toISOString(),
+      configured_by: userId,
+    });
+    await stub.disableLegacyActivityReport?.().catch(() => {});
+    return ephemeralMessage(
+      `Daily Digest is set for <#${interaction.channel_id}> every day at **${formatClock(local.hour, local.minute)} Arizona time**. Run **/daily-digest** anytime to post one now.`,
+    );
+  }
+
+  if (command === "daily-digest") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can post the Daily Digest.");
+    ctx.waitUntil(
+      postDailyDigest(env, stub, String(interaction.channel_id || ""), { manual: true })
+        .then(() => editOriginalInteraction(interaction, env, { content: "Daily Digest posted." }))
+        .catch((error) => failInteraction(interaction, env, "Daily Digest failed", error)),
+    );
+    return deferredEphemeral();
+  }
+
 
   if (command === "activation-checkin-preview") {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can use this command.");
@@ -448,7 +487,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.1").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.2").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -462,9 +501,9 @@ export async function ensureV40CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeV40CommandRegistration("activation-v40.1");
+    await stub.completeV40CommandRegistration("activation-v40.2");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.1", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.2", safeError(error)).catch(() => {});
     throw error;
   }
 }

@@ -32,6 +32,21 @@ export const ROADMAP_COMMANDS = Object.freeze([
   { name: "roadmap", description: "Open your personal Dojo roadmap progress", type: 1 },
   { name: "roadmap-setup", description: "Post or refresh the persistent Dojo roadmap card in this channel", type: 1 },
   { name: "roadmap-preview", description: "Preview every roadmap link before publishing", type: 1 },
+  {
+    name: "roadmap-visibility",
+    description: "Choose whether member roadmap progress is public or private",
+    type: 1,
+    options: [{
+      type: 3,
+      name: "mode",
+      description: "Public for testing, private when you want personal progress hidden",
+      required: true,
+      choices: [
+        { name: "Public", value: "public" },
+        { name: "Private", value: "private" },
+      ],
+    }],
+  },
 ]);
 
 const CHANNEL_ALIASES = Object.freeze({
@@ -58,6 +73,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     command === "roadmap" ||
     command === "roadmap-setup" ||
     command === "roadmap-preview" ||
+    command === "roadmap-visibility" ||
     customId.startsWith("roadmap:v41:");
   if (!isRoadmap) return null;
 
@@ -98,11 +114,33 @@ export async function handleRoadmapV41Interaction(request, env) {
     }
   }
 
+  if (command === "roadmap-visibility") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can change roadmap visibility.");
+    const mode = String(commandOption(interaction, "mode") || "").toLowerCase();
+    if (!["public", "private"].includes(mode)) return ephemeralMessage("Choose public or private.");
+    const current = await stub.getRoadmapV41Config().catch(() => null);
+    await stub.setRoadmapV41Config({ ...(current || {}), progress_visibility: mode });
+    return ephemeralMessage(
+      mode === "public"
+        ? "Roadmap progress is now **public** when members use /roadmap or View My Progress. Use /roadmap-visibility private later to switch it back."
+        : "Roadmap progress is now **private/ephemeral** again.",
+    );
+  }
+
   if (command === "roadmap" || customId === "roadmap:v41:view") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
     try {
       const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env));
-      return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
+      const config = await stub.getRoadmapV41Config().catch(() => null);
+      const isPublic = String(config?.progress_visibility || "public") !== "private";
+      return Response.json({
+        type: 4,
+        data: {
+          ...view,
+          ...(isPublic ? {} : { flags: EPHEMERAL }),
+          allowed_mentions: { parse: [] },
+        },
+      });
     } catch (error) {
       return ephemeralMessage(`I couldn't load your roadmap: ${safeError(error)}`);
     }
@@ -138,7 +176,7 @@ export async function handleRoadmapV41Interaction(request, env) {
 
 export async function ensureRoadmapV41CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41.1").catch(() => false);
+  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41.2").catch(() => false);
   if (!claimed) return;
 
   try {
@@ -153,9 +191,9 @@ export async function ensureRoadmapV41CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeRoadmapV41CommandRegistration("roadmap-v41.1");
+    await stub.completeRoadmapV41CommandRegistration("roadmap-v41.2");
   } catch (error) {
-    await stub.failRoadmapV41CommandRegistration("roadmap-v41.1", safeError(error)).catch(() => {});
+    await stub.failRoadmapV41CommandRegistration("roadmap-v41.2", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -187,12 +225,15 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
 
-  const [tenure, activation, manual, teamApplication, config] = await Promise.all([
+  const [tenure, activation, manual, teamApplication, config, taskStage] = await Promise.all([
     gateway.getTenureRecord?.(userId).catch(() => null),
     gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`),
     gateway.ctx.storage.get(`${MANUAL_PREFIX}${userId}`),
     gateway.ctx.storage.get(`${TEAM_APPLICATION_PREFIX}${userId}`),
     gateway.ctx.storage.get(CONFIG_KEY),
+    typeof gateway.getTaskStageV47 === "function"
+      ? gateway.getTaskStageV47(userId).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   if (!activation && !tenure) {
@@ -217,6 +258,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
       activation: deriveMember(ownerTestRecord),
       manual: { completed: [], updated_at: null },
       team_application: null,
+      task_stage: taskStage || null,
       config: config || null,
     };
   }
@@ -237,6 +279,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
     team_application: teamApplication
       ? { status: String(teamApplication.status || "pending"), submitted_at: teamApplication.submitted_at || null }
       : null,
+    task_stage: taskStage || null,
     config: config || null,
   };
 }
@@ -299,6 +342,7 @@ async function setupRoadmapCard(interaction, env, stub) {
     guild_id: String(env.DISCORD_GUILD_ID || ""),
     configured_by: interactionUserId(interaction),
     configured_at: new Date().toISOString(),
+    progress_visibility: previous?.progress_visibility || "public",
     placements,
   };
 
@@ -539,6 +583,7 @@ export function buildRoadmapModel(state) {
     win_complete: Boolean(activation.first_win_posted),
     win_within_7_days: Boolean(activation.first_win_within_7_days),
     team_application: state?.team_application || null,
+    task_stage: state?.task_stage || null,
     channels,
   };
 }
@@ -563,6 +608,14 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false) {
     fields.push({
       name: "✅ Starter Roadmap Complete",
       value: "Keep following the full 90-day roadmap and keep stacking wins.",
+      inline: false,
+    });
+  }
+
+  if (model.task_stage?.stage) {
+    fields.push({
+      name: "🧪 Fundamentals Task Stage",
+      value: `**${model.task_stage.label || `Task #${model.task_stage.stage}`}** · highest tagged task submission observed`,
       inline: false,
     });
   }
@@ -689,6 +742,10 @@ function commandSignature(command) {
 }
 function interactionUserId(interaction) {
   return String(interaction?.member?.user?.id || interaction?.user?.id || "");
+}
+function commandOption(interaction, name) {
+  return (Array.isArray(interaction?.data?.options) ? interaction.data.options : [])
+    .find((option) => String(option?.name || "") === String(name || ""))?.value ?? null;
 }
 function hasDojoAccess(interaction, env) {
   if (isOwner(interactionUserId(interaction), env)) return true;

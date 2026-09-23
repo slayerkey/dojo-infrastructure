@@ -1045,6 +1045,99 @@ async function runV40Queue(interaction, env, stub) {
   await editOriginalInteraction(interaction, env, payload);
 }
 
+async function previewCommunityNudge(interaction, targetId, env, stub) {
+  const { name, config } = await resolveNudgeMember(targetId, env, stub);
+  const payload = buildCommunityNudgePayload(name, env, config, { disabled: true });
+  await editOriginalInteraction(interaction, env, {
+    content: `**Community Nudge Preview — ${name}**\n_No DM was sent._`,
+    embeds: payload.embeds,
+    components: payload.components,
+  });
+}
+
+async function sendCommunityNudge(interaction, targetId, env, stub) {
+  const { name, config } = await resolveNudgeMember(targetId, env, stub);
+  const dm = await discordJson(`${DISCORD_API}/users/@me/channels`, env, {
+    method: "POST",
+    body: JSON.stringify({ recipient_id: String(targetId) }),
+  });
+  if (!dm?.id) throw new Error("Discord did not return a DM channel.");
+
+  const payload = buildCommunityNudgePayload(name, env, config, { disabled: false });
+  await discordJson(`${DISCORD_API}/channels/${dm.id}/messages`, env, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  await stub.applyActivationIntervention(targetId, "community_nudge_sent", String(interaction.id || ""));
+  await editOriginalInteraction(interaction, env, {
+    content: `Community nudge sent to **${escapeDiscord(name)}**. Their button response will be saved to the activation intervention state.`,
+    embeds: [],
+    components: [],
+  });
+}
+
+async function resolveNudgeMember(targetId, env, stub) {
+  const [member, snapshot, config] = await Promise.all([
+    discordJson(`${DISCORD_API}/guilds/${env.DISCORD_GUILD_ID}/members/${targetId}`, env).catch(() => null),
+    stub.getActivationV40Snapshot().catch(() => null),
+    stub.getRoadmapV41Config?.().catch(() => null),
+  ]);
+  const stored = (snapshot?.records || []).find((record) => String(record?.discord_user_id || "") === String(targetId || ""));
+  const currentIdentity = member ? identityFromGuildMember(member) : null;
+  const name = resolveDisplayName(targetId, currentIdentity, stored);
+  return { name, config };
+}
+
+export function buildCommunityNudgePayload(name, env, config, { disabled = false } = {}) {
+  const safeName = escapeDiscord(name || "there");
+  const description = [
+    `Hey **${safeName}** — quick check-in from Slayerkey's Training Dojo 👋`,
+    "",
+    "You joined because you wanted to improve and get closer to your goal rank. It looks like your roadmap may have stalled before you really got into the community.",
+    "",
+    "A big part of the Dojo is having other players around you who are working on the same thing — not just grinding alone.",
+    "",
+    "**Are you still looking to improve right now?**",
+  ].join("\n");
+
+  const rows = [{
+    type: 1,
+    components: [
+      { type: 2, style: 3, custom_id: "actv47:nudge:improving", label: "Still improving", disabled },
+      { type: 2, style: 2, custom_id: "actv47:nudge:notplaying", label: "Haven't played much", disabled },
+      { type: 2, style: 1, custom_id: "actv47:nudge:stuck", label: "I'm stuck", disabled },
+      { type: 2, style: 2, custom_id: "actv47:nudge:break", label: "Taking a break", disabled },
+    ],
+  }];
+
+  const guildId = String(config?.guild_id || env?.DISCORD_GUILD_ID || "");
+  const botsId = String(config?.channels?.bots || "");
+  if (guildId && botsId) {
+    rows.push({
+      type: 1,
+      components: [{
+        type: 2,
+        style: 5,
+        url: `https://discord.com/channels/${guildId}/${botsId}`,
+        label: "View My Roadmap",
+        emoji: { name: "🧭" },
+      }],
+    });
+  }
+
+  return {
+    content: "",
+    embeds: [{
+      title: "🧭 Quick Dojo Check-In",
+      description,
+      footer: { text: "Your response only helps us understand what kind of support would actually be useful." },
+    }],
+    components: rows,
+    allowed_mentions: { parse: [] },
+  };
+}
+
 async function runCheckinPreview(interaction, targetId, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
   const target = runtime.members.find((member) => String(member?.user?.id || "") === String(targetId || ""));
@@ -1811,6 +1904,7 @@ function safeError(error) {
 
 export const __test = Object.freeze({
   buildWeeklyDigestPayload,
+  buildCommunityNudgePayload,
   buildCheckinPrompt,
   buildProposedDm,
   checkinButtons,

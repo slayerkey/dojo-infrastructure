@@ -222,15 +222,15 @@ async function runActivityScheduler(env) {
   const local = phoenixScheduleParts(now);
   const today = phoenixDateKey(now);
 
+  const config = await stub.getActivityConfig().catch(() => null);
+  if (!config?.enabled || !config.channel_id) return;
+
   const commandClaimed = await stub.claimActivityCommandDay(today).catch(() => false);
   if (commandClaimed) {
     await ensureActivityCommands(env).catch((error) => {
       console.error("Activity command registration failed:", error);
     });
   }
-
-  const config = await stub.getActivityConfig().catch(() => null);
-  if (!config?.enabled || !config.channel_id) return;
   if (
     Number(config.weekday) !== local.weekday ||
     Number(config.hour) !== local.hour ||

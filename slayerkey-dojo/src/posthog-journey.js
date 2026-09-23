@@ -153,31 +153,13 @@ export async function handleCustomerIdentityBridge(request, env) {
   if (request.method !== "POST") {
     return Response.json({ ok: false, error: "POST required." }, { status: 405 });
   }
-  if ((!env.DOJO_IDENTITY_BRIDGE_SECRET && !env.WHOP_API_KEY) || !env.MEMBER_LINKS) {
-    return Response.json({ ok: false, error: "Identity bridge is not configured." }, { status: 503 });
+  if (!env.MEMBER_LINKS) {
+    return Response.json({ ok: false, error: "Identity bridge storage is not configured." }, { status: 503 });
   }
 
   const timestampHeader = String(request.headers.get("X-Slayerkey-Timestamp") || "").trim();
   const signatureHeader = String(request.headers.get("X-Slayerkey-Signature") || "").trim();
   const rawBody = await request.text();
-  const timestampSeconds = Number(timestampHeader);
-
-  if (!Number.isFinite(timestampSeconds) || Math.abs(Date.now() - timestampSeconds * 1000) > BRIDGE_MAX_SKEW_MS) {
-    return Response.json({ ok: false, error: "Invalid bridge timestamp." }, { status: 401 });
-  }
-
-  const whopApiKey = String(env.WHOP_API_KEY || "").trim();
-  const bridgeSecret = whopApiKey
-    ? await hmacSha256Hex(whopApiKey, "slayerkey-dojo-identity-bridge-v1")
-    : String(env.DOJO_IDENTITY_BRIDGE_SECRET || "");
-  const expected = await hmacSha256Hex(
-    bridgeSecret,
-    `${timestampHeader}.${rawBody}`,
-  );
-  const supplied = signatureHeader.startsWith("sha256=") ? signatureHeader.slice(7) : "";
-  if (!constantTimeHexEqual(expected, supplied)) {
-    return Response.json({ ok: false, error: "Invalid bridge signature." }, { status: 401 });
-  }
 
   let body = null;
   try {
@@ -188,8 +170,46 @@ export async function handleCustomerIdentityBridge(request, env) {
 
   const rawWhopUserId = safeServerIdentifier(body?.whop_user_id);
   const posthogDistinctId = safeDistinctId(body?.posthog_distinct_id);
-  if (!rawWhopUserId || !posthogDistinctId) {
-    return Response.json({ ok: false, error: "Missing identity fields." }, { status: 400 });
+  const paymentId = safeServerIdentifier(body?.payment_id);
+  if (!rawWhopUserId || !posthogDistinctId || !paymentId) {
+    return Response.json({ ok: false, error: "Missing identity or payment fields." }, { status: 400 });
+  }
+
+  let verifiedBy = "";
+  let attemptedDedicatedSignature = false;
+  const dedicatedSecret = String(env.DOJO_IDENTITY_BRIDGE_SECRET || "").trim();
+  if (dedicatedSecret && timestampHeader && signatureHeader) {
+    attemptedDedicatedSignature = true;
+    const timestampSeconds = Number(timestampHeader);
+    if (
+      Number.isFinite(timestampSeconds) &&
+      Math.abs(Date.now() - timestampSeconds * 1000) <= BRIDGE_MAX_SKEW_MS
+    ) {
+      const expected = await hmacSha256Hex(
+        dedicatedSecret,
+        `${timestampHeader}.${rawBody}`,
+      );
+      const supplied = signatureHeader.startsWith("sha256=") ? signatureHeader.slice(7) : "";
+      if (constantTimeHexEqual(expected, supplied)) {
+        verifiedBy = "dedicated_secret";
+      }
+    }
+  }
+
+  if (!verifiedBy) {
+    if (attemptedDedicatedSignature && !String(env.WHOP_API_KEY || "").trim()) {
+      return Response.json({ ok: false, error: "Invalid bridge signature." }, { status: 401 });
+    }
+    const proof = await verifyWhopPaymentIdentityProof(
+      env,
+      paymentId,
+      rawWhopUserId,
+      posthogDistinctId,
+    );
+    if (!proof.ok) {
+      return Response.json({ ok: false, error: proof.error }, { status: proof.status });
+    }
+    verifiedBy = "whop_payment";
   }
 
   const key = `whop:${rawWhopUserId}`;
@@ -202,11 +222,80 @@ export async function handleCustomerIdentityBridge(request, env) {
     posthog_identity_source: posthogDistinctId === fallback
       ? "whop_user_id_hash"
       : "website_posthog_distinct_id",
+    posthog_identity_verified_by: verifiedBy,
+    posthog_identity_payment_id_hash: await sha256Hex(paymentId),
     posthog_identity_updated_at: now,
     updated_at: now,
   }));
 
-  return Response.json({ ok: true });
+  return Response.json({ ok: true, verified_by: verifiedBy });
+}
+
+async function verifyWhopPaymentIdentityProof(env, paymentId, rawWhopUserId, posthogDistinctId) {
+  const apiKey = String(env.WHOP_API_KEY || "").trim();
+  if (!apiKey) {
+    return { ok: false, status: 503, error: "Whop payment verification is not configured." };
+  }
+  if (!/^pay_[A-Za-z0-9]+$/.test(paymentId)) {
+    return { ok: false, status: 400, error: "Invalid Whop payment ID." };
+  }
+
+  let response;
+  try {
+    response = await fetch(`https://api.whop.com/api/v1/payments/${encodeURIComponent(paymentId)}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Api-Version-Date": "2026-09-22-2",
+        Accept: "application/json",
+      },
+    });
+  } catch {
+    return { ok: false, status: 502, error: "Whop payment verification request failed." };
+  }
+
+  if (!response.ok) {
+    console.error("Whop payment verification returned non-2xx:", response.status);
+    return { ok: false, status: 502, error: `Whop payment verification returned HTTP ${response.status}.` };
+  }
+
+  let payment;
+  try {
+    payment = await response.json();
+  } catch {
+    return { ok: false, status: 502, error: "Whop payment verification returned invalid JSON." };
+  }
+
+  const verifiedPaymentId = safeServerIdentifier(payment?.id);
+  const verifiedUserId = safeServerIdentifier(
+    typeof payment?.user === "string" ? payment.user : payment?.user?.id,
+  );
+  const verifiedCompanyId = safeServerIdentifier(
+    typeof payment?.company === "string" ? payment.company : payment?.company?.id,
+  );
+  const expectedCompanyId = safeServerIdentifier(env.WHOP_COMPANY_ID);
+  const metadataDistinctId = safeDistinctId(payment?.metadata?.posthog_distinct_id);
+  const paid = (
+    String(payment?.status || "").toLowerCase() === "succeeded" ||
+    String(payment?.status || "").toLowerCase() === "paid" ||
+    String(payment?.substatus || "").toLowerCase() === "succeeded" ||
+    Boolean(payment?.paid_at)
+  );
+
+  if (verifiedPaymentId !== paymentId || verifiedUserId !== rawWhopUserId) {
+    return { ok: false, status: 401, error: "Whop payment identity did not match." };
+  }
+  if (expectedCompanyId && verifiedCompanyId && verifiedCompanyId !== expectedCompanyId) {
+    return { ok: false, status: 401, error: "Whop payment company did not match." };
+  }
+  if (!paid) {
+    return { ok: false, status: 409, error: "Whop payment is not confirmed paid." };
+  }
+  if (!metadataDistinctId || metadataDistinctId !== posthogDistinctId) {
+    return { ok: false, status: 401, error: "Whop payment metadata did not match the PostHog identity." };
+  }
+
+  return { ok: true };
 }
 
 export async function signIdentityBridgeBody(secret, timestamp, rawBody) {

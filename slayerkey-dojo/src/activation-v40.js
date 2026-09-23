@@ -161,7 +161,7 @@ export async function handleV40Interaction(request, env, ctx) {
   if (command === "daily-digest-setup") {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can configure the Daily Digest.");
     const local = phoenixClockParts(new Date());
-    const config = await stub.setDailyDigestConfig({
+    await stub.setDailyDigestConfig({
       enabled: true,
       channel_id: String(interaction.channel_id || ""),
       hour: local.hour,
@@ -169,7 +169,7 @@ export async function handleV40Interaction(request, env, ctx) {
       configured_at: new Date().toISOString(),
       configured_by: userId,
     });
-    await stub.disableLegacyActivityReport?.().catch(() => {});
+    await stub.disableLegacyActivityReport().catch(() => {});
     return ephemeralMessage(
       `Daily Digest is set for <#${interaction.channel_id}> every day at **${formatClock(local.hour, local.minute)} Arizona time**. Run **/daily-digest** anytime to post one now.`,
     );

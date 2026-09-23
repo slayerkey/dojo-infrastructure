@@ -204,6 +204,26 @@ test("owner gets a persistent test cohort record instead of a disposable preview
   assert.equal(second.test_mode, true);
 });
 
+test("verified Dojo-role member can load roadmap without stored tenure or activation", async () => {
+  const store = storage([
+    ["roadmap:v41:config", { channels: { start_here: "123" } }],
+  ]);
+  const gateway = {
+    ctx: { storage: store.api },
+    async getTenureRecord() { return null; },
+    async getTaskStageV47() { return { stage: 9, label: "Month 2 - DM Review" }; },
+  };
+
+  const state = await getRoadmapV41State(gateway, "role-member", false, true);
+  assert.equal(state.ok, true);
+  assert.equal(state.cohort_source, "discord_dojo_role");
+  assert.equal(state.activation.membership_active, true);
+  assert.equal(state.activation.anchor_valid, false);
+  assert.equal(state.activation.activation_started_at, null);
+  assert.equal(state.task_stage.stage, 9);
+  assert.equal(store.values.has("activation:v3:member:role-member"), false);
+});
+
 test("roadmap state refuses users outside the known Dojo cohort", async () => {
   const store = storage();
   const gateway = {

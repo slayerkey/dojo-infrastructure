@@ -18,12 +18,14 @@ import {
   getActivationV40Snapshot,
   getWeeklyDigestConfig,
   recordActivationCheckinWin,
+  recordCommunityNudgeDetails,
   saveTeamApplicationDraft,
   setWeeklyDigestConfig,
   updateOrganizerApplicationStatus,
   updateTeamApplicationStatus,
 } from "../src/activation-v40.js";
 import {
+  buildDigestMemberField,
   buildWeeklyDigestPayload,
   formatDigestMember,
 } from "../src/weekly-digest-v46.js";
@@ -556,7 +558,6 @@ test("Premier Team Organizer application stores separately from player applicati
     "organizer-interaction",
     {
       region: "EU",
-      riot_or_tracker: "Organizer#1234",
       availability: "Evenings CET",
       why_organize: "I like scheduling and keeping groups moving.",
       experience: "Ran a collegiate team Discord.",
@@ -579,6 +580,9 @@ test("Premier Team Organizer application stores separately from player applicati
   assert.equal(embed.fields[0].name, "Status");
   assert.equal(embed.fields[1].name, "Region");
   assert.match(embed.fields[1].value, /Europe/);
+  assert.equal(embed.fields.some((field) => /Riot|Tracker/.test(field.name)), false);
+  assert.equal(embed.fields.some((field) => field.name === "Why They're Interested"), true);
+  assert.equal(embed.fields.some((field) => field.name === "Why They're a Good Fit"), true);
 
   const buttons = v40.organizerApplicationStatusButtons(result.application)[0].components;
   assert.deepEqual(buttons.map((button) => button.label), ["Accept", "Decline"]);
@@ -591,7 +595,6 @@ test("organizer decline reason is stored", async () => {
       discord_user_id: "100",
       region: "NA",
       status: "pending",
-      riot_or_tracker: "Test#NA1",
       availability: "Weeknights",
       why_organize: "I can organize schedules.",
       submitted_at: "2026-09-21T10:00:00.000Z",
@@ -623,44 +626,49 @@ test("activation model exposes current members with username fallback for digest
   assert.equal(model.members[0].username, "visible_handle");
 });
 
-test("Weekly Digest separates never-started, not-social, lapsed, active-no-win and activated members", () => {
+test("Weekly Digest separates activation groups into readable embeds", () => {
   const payload = buildWeeklyDigestPayload({
     members: [
       { discord_user_id: "1", username: "never", display_name: "Never", any_message_observed: false, community_participated: false, first_win_posted: false, messages_last_7_days: 0 },
-      { discord_user_id: "2", username: "onboarded", display_name: "Onboarded", any_message_observed: true, community_participated: false, first_win_posted: false, messages_last_7_days: 1, introduction_posted: true, task_stage: 2 },
+      { discord_user_id: "2", username: "onboarded", display_name: "Onboarded", any_message_observed: true, community_participated: false, first_win_posted: false, messages_last_7_days: 1, introduction_posted: true, task_stage: 2, task_stage_label: "#2 - Tracker Review" },
       { discord_user_id: "3", username: "lapsed", display_name: "Lapsed", any_message_observed: true, community_participated: true, first_win_posted: true, messages_last_7_days: 0 },
       { discord_user_id: "4", username: "active", display_name: "Active", any_message_observed: true, community_participated: true, first_win_posted: false, messages_last_7_days: 4 },
       { discord_user_id: "5", username: "activated", display_name: "Activated", any_message_observed: true, community_participated: true, first_win_posted: true, messages_last_7_days: 7 },
     ],
   });
 
-  const embed = payload.embeds[0];
-  assert.match(embed.description, /Onboarding → Community Participation → First Win/);
-  assert.match(embed.fields[0].value, /No tracked message ever: \*\*1\*\*/);
-  assert.match(embed.fields[0].value, /Onboarded, not in community: \*\*1\*\*/);
-  assert.match(embed.fields[0].value, /Participated before, 0 msgs \/ 7d: \*\*1\*\*/);
-  assert.match(embed.fields[0].value, /Active, no first win: \*\*1\*\*/);
-  assert.match(embed.fields[0].value, /First win posted: \*\*2\*\*/);
+  const summary = payload.embeds[0];
+  assert.match(summary.description, /Onboarding → Community Participation → First Win/);
+  assert.match(summary.description, /No message evidence found: \*\*1\*\*/);
+  assert.match(summary.description, /Onboarded, not in community: \*\*1\*\*/);
+  assert.match(summary.description, /Participated before, 0 msgs \/ 7d: \*\*1\*\*/);
+  assert.match(summary.description, /Active, no first win: \*\*1\*\*/);
+  assert.match(summary.description, /First win posted: \*\*2\*\*/);
 
-  const allGroupText = embed.fields.slice(1).map((field) => field.value).join("\n");
-  assert.match(allGroupText, /<@1>/);
-  assert.match(allGroupText, /<@2>/);
-  assert.match(allGroupText, /<@3>/);
-  assert.match(allGroupText, /<@4>/);
-  assert.equal(allGroupText.includes("<@5>"), false);
-  assert.match(allGroupText, /Task #2/);
+  const groupText = payload.embeds.slice(1)
+    .flatMap((embed) => embed.fields || [])
+    .map((field) => field.name + "\n" + field.value)
+    .join("\n");
+  assert.match(groupText, /<@1>/);
+  assert.match(groupText, /<@2>/);
+  assert.match(groupText, /<@3>/);
+  assert.match(groupText, /<@4>/);
+  assert.equal(groupText.includes("<@5>"), false);
+  assert.match(groupText, /#2/);
 });
 
-test("Weekly Digest row includes a plain Discord handle fallback next to the clickable mention", () => {
-  const row = formatDigestMember({
+
+test("Weekly Digest member field keeps clickable mention plus handle and clear status header", () => {
+  const field = buildDigestMemberField({
     discord_user_id: "123",
     username: "fallback_handle",
     display_name: "Fallback",
     messages_last_7_days: 0,
   });
-  assert.match(row, /<@123>/);
-  assert.match(row, /@fallback_handle/);
-  assert.match(row, /7d \*\*0\*\*/);
+  assert.match(field.name, /<@123>/);
+  assert.match(field.name, /@fallback_handle/);
+  assert.match(field.value, /Intro\s+Community\s+Task\s+Win\s+7d/);
+  assert.match(field.value, /❌/);
 });
 
 test("Weekly Digest config migrates the old activity-report channel and disables the legacy report", async () => {
@@ -762,6 +770,25 @@ test("activation model derives any-message and community participation from hist
   assert.equal(member.task_stage_label, "#4 - Daily Routine");
 });
 
+test("recent weekly messages or a task-stage submission prevent false no-message-ever classification", () => {
+  const recent = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 4 },
+    now: new Date("2026-09-10T00:00:00.000Z"),
+  }).members[0];
+  assert.equal(recent.any_message_observed, true);
+
+  const taskOnly = buildActivationV40Model({
+    records: [activationRecord("200")],
+    currentMembers: [guildMember("200")],
+    totals: { "200": 0 },
+    taskStages: { "200": { stage: 7, label: "#7 - Pre Round LEAD" } },
+    now: new Date("2026-09-10T00:00:00.000Z"),
+  }).members[0];
+  assert.equal(taskOnly.any_message_observed, true);
+});
+
 
 test("community nudge payload uses improvement pain point, response buttons, and roadmap link", () => {
   const payload = v40.buildCommunityNudgePayload(
@@ -775,7 +802,7 @@ test("community nudge payload uses improvement pain point, response buttons, and
   assert.match(embed.description, /other players around you/i);
   assert.deepEqual(
     payload.components[0].components.map((button) => button.label),
-    ["Still improving", "Haven't played much", "I'm stuck", "Taking a break"],
+    ["Still improving", "Haven't played much", "I'm stuck", "Taking a break", "Tell me what's going on"],
   );
   assert.equal(payload.components[1].components[0].label, "View My Roadmap");
   assert.equal(payload.components[1].components[0].url, "https://discord.com/channels/guild/bots");
@@ -790,21 +817,50 @@ test("community nudge responses persist useful states without enabling an automa
   assert.equal(pause.state.snooze_until, "2026-10-10T00:00:00.000Z");
 });
 
-test("Weekly Digest row includes intro, community, task stage, win and response in one compact line", () => {
-  const row = formatDigestMember({
+test("Weekly Digest member field puts labels above the check/X row and shows Month 2 clearly", () => {
+  const field = buildDigestMemberField({
     discord_user_id: "123",
     username: "member",
     display_name: "Member",
     introduction_posted: true,
     community_participated: false,
-    task_stage: 4,
+    task_stage: 8,
+    task_stage_label: "Month 2 - DM Review",
     first_win_posted: false,
     messages_last_7_days: 0,
     last_intervention: "community_break",
   });
-  assert.match(row, /Intro ✅/);
-  assert.match(row, /Community ❌/);
-  assert.match(row, /Task #4/);
-  assert.match(row, /Win ❌/);
-  assert.match(row, /Reply: \*\*Taking a break\*\*/);
+  assert.match(field.value, /Intro\s+Community\s+Task\s+Win\s+7d/);
+  assert.match(field.value, /✅/);
+  assert.match(field.value, /❌/);
+  assert.match(field.value, /Month 2/);
+  assert.match(field.value, /Reply: \*\*Taking a break\*\*/);
+});
+
+
+test("open-ended community nudge response is stored for the next Weekly Digest", async () => {
+  const { values, storage } = mockStorage();
+  const gateway = { ctx: { storage } };
+
+  const result = await recordCommunityNudgeDetails(
+    gateway,
+    "100",
+    "I'm busy with school this week but still want to improve.",
+    "details-1",
+  );
+
+  assert.equal(result.ok, true);
+  const stored = values.get("activation:v40:intervention:100");
+  assert.equal(stored.status, "community_replied");
+  assert.equal(stored.last_action, "community_details");
+  assert.match(stored.community_note, /busy with school/);
+
+  const model = buildActivationV40Model({
+    records: [activationRecord("100")],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 0 },
+    interventions: { "100": stored },
+    now: new Date("2026-09-10T00:00:00.000Z"),
+  });
+  assert.match(model.members[0].community_note, /busy with school/);
 });

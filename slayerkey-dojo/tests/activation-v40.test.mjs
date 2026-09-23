@@ -623,25 +623,32 @@ test("activation model exposes current members with username fallback for digest
   assert.equal(model.members[0].username, "visible_handle");
 });
 
-test("Weekly Digest qualification is exactly no win OR zero 7-day messages", () => {
+test("Weekly Digest separates never-started, not-social, lapsed, active-no-win and activated members", () => {
   const payload = buildWeeklyDigestPayload({
     members: [
-      { discord_user_id: "1", username: "both", display_name: "Both", first_win_posted: false, messages_last_7_days: 0 },
-      { discord_user_id: "2", username: "no_win", display_name: "No Win", first_win_posted: false, messages_last_7_days: 4 },
-      { discord_user_id: "3", username: "inactive", display_name: "Inactive", first_win_posted: true, messages_last_7_days: 0 },
-      { discord_user_id: "4", username: "healthy", display_name: "Healthy", first_win_posted: true, messages_last_7_days: 7 },
+      { discord_user_id: "1", username: "never", display_name: "Never", any_message_observed: false, community_participated: false, first_win_posted: false, messages_last_7_days: 0 },
+      { discord_user_id: "2", username: "onboarded", display_name: "Onboarded", any_message_observed: true, community_participated: false, first_win_posted: false, messages_last_7_days: 1, introduction_posted: true, task_stage: 2 },
+      { discord_user_id: "3", username: "lapsed", display_name: "Lapsed", any_message_observed: true, community_participated: true, first_win_posted: true, messages_last_7_days: 0 },
+      { discord_user_id: "4", username: "active", display_name: "Active", any_message_observed: true, community_participated: true, first_win_posted: false, messages_last_7_days: 4 },
+      { discord_user_id: "5", username: "activated", display_name: "Activated", any_message_observed: true, community_participated: true, first_win_posted: true, messages_last_7_days: 7 },
     ],
   });
 
   const embed = payload.embeds[0];
-  assert.match(embed.description, /either/);
-  assert.match(embed.fields[0].value, /Win \+ ✅ 7d messages: \*\*1\*\*/);
-  assert.match(embed.fields[0].value, /❌ Win \+ ❌ 7d messages: \*\*1\*\*/);
+  assert.match(embed.description, /Onboarding → Community Participation → First Win/);
+  assert.match(embed.fields[0].value, /No tracked message ever: \*\*1\*\*/);
+  assert.match(embed.fields[0].value, /Onboarded, not in community: \*\*1\*\*/);
+  assert.match(embed.fields[0].value, /Participated before, 0 msgs \/ 7d: \*\*1\*\*/);
+  assert.match(embed.fields[0].value, /Active, no first win: \*\*1\*\*/);
+  assert.match(embed.fields[0].value, /First win posted: \*\*2\*\*/);
+
   const allGroupText = embed.fields.slice(1).map((field) => field.value).join("\n");
   assert.match(allGroupText, /<@1>/);
   assert.match(allGroupText, /<@2>/);
   assert.match(allGroupText, /<@3>/);
-  assert.equal(allGroupText.includes("<@4>"), false);
+  assert.match(allGroupText, /<@4>/);
+  assert.equal(allGroupText.includes("<@5>"), false);
+  assert.match(allGroupText, /Task #2/);
 });
 
 test("Weekly Digest row includes a plain Discord handle fallback next to the clickable mention", () => {
@@ -653,7 +660,7 @@ test("Weekly Digest row includes a plain Discord handle fallback next to the cli
   });
   assert.match(row, /<@123>/);
   assert.match(row, /@fallback_handle/);
-  assert.match(row, /0 msgs/);
+  assert.match(row, /7d \*\*0\*\*/);
 });
 
 test("Weekly Digest config migrates the old activity-report channel and disables the legacy report", async () => {
@@ -729,4 +736,28 @@ test("Weekly Digest migration keeps the old weekly weekday/time even if a Daily 
   assert.equal(config.hour, 6);
   assert.equal(config.minute, 0);
   assert.equal(config.migrated_from, "weekly_activity_report");
+});
+
+
+test("activation model derives any-message and community participation from historical activation evidence", () => {
+  const model = buildActivationV40Model({
+    records: [
+      activationRecord("100", {
+        introduction_at: "2026-09-01T01:00:00.000Z",
+        first_general_message_at: "2026-09-02T01:00:00.000Z",
+      }),
+    ],
+    currentMembers: [guildMember("100")],
+    totals: { "100": 0 },
+    taskStages: {
+      "100": { stage: 4, label: "#4 - Daily Routine" },
+    },
+    now: new Date("2026-09-10T00:00:00.000Z"),
+  });
+  const member = model.members[0];
+  assert.equal(member.any_message_observed, true);
+  assert.equal(member.introduction_posted, true);
+  assert.equal(member.community_participated, true);
+  assert.equal(member.task_stage, 4);
+  assert.equal(member.task_stage_label, "#4 - Daily Routine");
 });

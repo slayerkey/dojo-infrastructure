@@ -16,7 +16,7 @@ const TASK_STAGE_PREFIX = "taskstage:v47:member:";
 const TASK_TAG_CACHE_KEY = "taskstage:v47:tags";
 const TASK_SCAN_STATE_KEY = "taskstage:v47:last-scan";
 
-export async function observeV47Message(gateway, message) {
+export async function observeV47Message(gateway, message, allowRoleFallback = false) {
   const userId = String(message?.author?.id || "");
   if (!userId || message?.author?.bot) return { ok: false, reason: "not_human" };
 
@@ -26,25 +26,48 @@ export async function observeV47Message(gateway, message) {
   const tenure = await gateway.getTenureRecord?.(userId).catch(() => null);
   const key = `${MEMBER_PREFIX}${userId}`;
   let record = await gateway.ctx.storage.get(key);
-  if (!record && !tenure) return { ok: false, reason: "not_known_dojo_member" };
+  if (!record && !tenure) {
+    if (!allowRoleFallback) return { ok: false, reason: "not_known_dojo_member" };
+    record = {
+      discord_user_id: userId,
+      membership_active: true,
+      activation_started_at: null,
+      activation_anchor_source: "unknown",
+      cohort_source: "discord_dojo_role",
+    };
+  }
 
   record = mergeTenureIntoRecord(record, userId, tenure);
   record = mergeIdentityIntoRecord(record, identityFromMessage(message));
 
-  const anchor = normalizeIso(record.activation_started_at);
-  if (!anchor || Date.parse(timestamp) < Date.parse(anchor)) return { ok: false, reason: "before_anchor" };
-
   let changed = false;
-  if (!record.first_any_message_at) {
-    record.first_any_message_at = timestamp;
+  const observedAny = earliestIso(record.observed_any_message_at, timestamp);
+  if (observedAny !== record.observed_any_message_at) {
+    record.observed_any_message_at = observedAny;
     changed = true;
   }
 
   const community = await isCommunityMessage(gateway, message);
-  if (community && !record.first_community_message_at) {
-    record.first_community_message_at = timestamp;
-    record.first_community_message_source = community;
-    changed = true;
+  if (community) {
+    const observedCommunity = earliestIso(record.observed_community_message_at, timestamp);
+    if (observedCommunity !== record.observed_community_message_at) {
+      record.observed_community_message_at = observedCommunity;
+      record.observed_community_message_source = record.observed_community_message_source || community;
+      changed = true;
+    }
+  }
+
+  const anchor = normalizeIso(record.activation_started_at);
+  if (anchor && Date.parse(timestamp) >= Date.parse(anchor)) {
+    if (!record.first_any_message_at) {
+      record.first_any_message_at = timestamp;
+      changed = true;
+    }
+    if (community && !record.first_community_message_at) {
+      record.first_community_message_at = timestamp;
+      record.first_community_message_source = community;
+      changed = true;
+    }
   }
 
   if (changed) {
@@ -55,8 +78,9 @@ export async function observeV47Message(gateway, message) {
   return {
     ok: true,
     changed,
-    any_message: Boolean(record.first_any_message_at),
-    community_message: Boolean(record.first_community_message_at),
+    anchor_valid: Boolean(anchor),
+    any_message: Boolean(record.first_any_message_at || record.observed_any_message_at),
+    community_message: Boolean(record.first_community_message_at || record.observed_community_message_at),
   };
 }
 

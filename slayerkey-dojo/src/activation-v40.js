@@ -16,9 +16,9 @@ import {
   validateTeamApplication,
 } from "./activation-v40-core.js";
 import {
-  buildDailyDigestPayload,
-  postDailyDigest,
-} from "./daily-digest-v45.js";
+  buildWeeklyDigestPayload,
+  postWeeklyDigest,
+} from "./weekly-digest-v46.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -30,8 +30,9 @@ const TEAM_DRAFT_PREFIX = "teamapp:v40:draft:";
 const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
 const ORGANIZER_APPLICATION_PREFIX = "teamapp:v43:organizer:";
 const TEAM_PUBLIC_CARD_KEY = "teamapp:v41:public-card";
-const DAILY_DIGEST_CONFIG_KEY = "activation:v45:daily-digest-config";
-const DAILY_DIGEST_LAST_DATE_KEY = "activation:v45:daily-digest-last-date";
+const WEEKLY_DIGEST_CONFIG_KEY = "activation:v46:weekly-digest-config";
+const WEEKLY_DIGEST_LAST_DATE_KEY = "activation:v46:weekly-digest-last-date";
+const LEGACY_DAILY_DIGEST_CONFIG_KEY = "activation:v45:daily-digest-config";
 const PREMIER_INFO_MESSAGE_URL = "https://discord.com/channels/1494446702378221590/1529539108597268510/1529545999889072322";
 const encoder = new TextEncoder();
 
@@ -44,17 +45,17 @@ const FIRST_WIN_CHECKIN_PROMPT =
 export const V40_COMMANDS = Object.freeze([
   {
     name: "activation-queue",
-    description: "Show the clean Dojo Daily Digest member table",
+    description: "Show the clean Dojo Weekly Digest member table",
     type: 1,
   },
   {
-    name: "daily-digest",
-    description: "Post the clean Dojo Daily Digest now",
+    name: "weekly-digest",
+    description: "Post the clean Dojo Weekly Digest now",
     type: 1,
   },
   {
-    name: "daily-digest-setup",
-    description: "Post the Dojo Daily Digest here every day at this time",
+    name: "weekly-digest-setup",
+    description: "Post the Dojo Weekly Digest here once per week",
     type: 1,
   },
   {
@@ -128,7 +129,7 @@ export async function handleV40Interaction(request, env, ctx) {
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
   const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isV40 =
-    ["activation-audit", "activation-queue", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
+    ["activation-audit", "activation-queue", "weekly-digest", "weekly-digest-setup", "daily-digest", "daily-digest-setup", "activation-checkin-preview", "wincheckin", "teamapply", "teamapply-setup", "premier-buttons-setup"].includes(command) ||
     customId.startsWith("actv40:") ||
     customId.startsWith("teamapp:v40:") ||
     customId.startsWith("teamapp:v41:") ||
@@ -158,29 +159,56 @@ export async function handleV40Interaction(request, env, ctx) {
     ctx.waitUntil(runV40Queue(interaction, env, stub).catch((error) => failInteraction(interaction, env, "Activation queue failed", error)));
     return deferredEphemeral();
   }
-  if (command === "daily-digest-setup") {
-    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can configure the Daily Digest.");
-    const local = phoenixClockParts(new Date());
-    await stub.setDailyDigestConfig({
+  if (command === "daily-digest" || command === "daily-digest-setup") {
+    return ephemeralMessage("Daily Digest was renamed to **Weekly Digest**. Use **/weekly-digest** or **/weekly-digest-setup**.");
+  }
+
+  if (command === "weekly-digest-setup") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can configure the Weekly Digest.");
+
+    const existing = await stub.getWeeklyDigestConfig().catch(() => null);
+    const legacy = await stub.getActivityConfig?.().catch(() => null);
+    const now = new Date();
+    const current = phoenixScheduleParts(now);
+
+    const weekday = Number.isInteger(Number(existing?.weekday))
+      ? Number(existing.weekday)
+      : Number.isInteger(Number(legacy?.weekday))
+        ? Number(legacy.weekday)
+        : current.weekday;
+    const hour = Number.isInteger(Number(existing?.hour))
+      ? Number(existing.hour)
+      : Number.isInteger(Number(legacy?.hour))
+        ? Number(legacy.hour)
+        : current.hour;
+    const minute = Number.isInteger(Number(existing?.minute))
+      ? Number(existing.minute)
+      : Number.isInteger(Number(legacy?.minute))
+        ? Number(legacy.minute)
+        : current.minute;
+
+    await stub.setWeeklyDigestConfig({
       enabled: true,
       channel_id: String(interaction.channel_id || ""),
-      hour: local.hour,
-      minute: local.minute,
-      configured_at: new Date().toISOString(),
+      weekday,
+      hour,
+      minute,
+      configured_at: now.toISOString(),
       configured_by: userId,
     });
     await stub.disableLegacyActivityReport().catch(() => {});
+
     return ephemeralMessage(
-      `Daily Digest is set for <#${interaction.channel_id}> every day at **${formatClock(local.hour, local.minute)} Arizona time**. Run **/daily-digest** anytime to post one now.`,
+      `Weekly Digest is set for <#${interaction.channel_id}> every **${weekdayName(weekday)} at ${formatClock(hour, minute)} Arizona time**. Run **/weekly-digest** anytime to post the current scan manually.`,
     );
   }
 
-  if (command === "daily-digest") {
-    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can post the Daily Digest.");
+  if (command === "weekly-digest") {
+    if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can post the Weekly Digest.");
     ctx.waitUntil(
-      postDailyDigest(env, stub, String(interaction.channel_id || ""), { manual: true })
-        .then(() => editOriginalInteraction(interaction, env, { content: "Daily Digest posted." }))
-        .catch((error) => failInteraction(interaction, env, "Daily Digest failed", error)),
+      postWeeklyDigest(env, stub, String(interaction.channel_id || ""), { manual: true })
+        .then(() => editOriginalInteraction(interaction, env, { content: "Weekly Digest posted from a fresh scan." }))
+        .catch((error) => failInteraction(interaction, env, "Weekly Digest failed", error)),
     );
     return deferredEphemeral();
   }
@@ -491,7 +519,7 @@ export async function handleV40Interaction(request, env, ctx) {
 
 export async function ensureV40CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimV40CommandRegistration("activation-v40.2").catch(() => false);
+  const claimed = await stub.claimV40CommandRegistration("activation-v40.3").catch(() => false);
   if (!claimed) return;
   try {
     const base = `${DISCORD_API}/applications/${env.DISCORD_APP_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`;
@@ -505,9 +533,18 @@ export async function ensureV40CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeV40CommandRegistration("activation-v40.2");
+
+    // Remove stale report commands so Discord only exposes the weekly workflow.
+    for (const staleName of ["daily-digest", "daily-digest-setup", "activitysetup", "activitycheck"]) {
+      const stale = byName.get(staleName);
+      if (stale?.id) {
+        await discordJson(`${base}/${stale.id}`, env, { method: "DELETE" });
+      }
+    }
+
+    await stub.completeV40CommandRegistration("activation-v40.3");
   } catch (error) {
-    await stub.failV40CommandRegistration("activation-v40.2", safeError(error)).catch(() => {});
+    await stub.failV40CommandRegistration("activation-v40.3", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -545,46 +582,58 @@ export async function failV40CommandRegistration(gateway, version, error) {
   });
 }
 
-export async function setDailyDigestConfig(gateway, config) {
+export async function setWeeklyDigestConfig(gateway, config) {
   const next = {
     ...(config || {}),
     enabled: config?.enabled !== false,
     channel_id: String(config?.channel_id || ""),
+    weekday: Number(config?.weekday ?? 0),
     hour: Number(config?.hour || 0),
     minute: Number(config?.minute || 0),
     updated_at: new Date().toISOString(),
   };
-  await gateway.ctx.storage.put(DAILY_DIGEST_CONFIG_KEY, next);
+  await gateway.ctx.storage.put(WEEKLY_DIGEST_CONFIG_KEY, next);
   return { ok: true, config: next };
 }
 
-export async function getDailyDigestConfig(gateway) {
-  const current = await gateway.ctx.storage.get(DAILY_DIGEST_CONFIG_KEY);
+export async function getWeeklyDigestConfig(gateway) {
+  const current = await gateway.ctx.storage.get(WEEKLY_DIGEST_CONFIG_KEY);
   if (current?.channel_id) return current;
 
-  // If the older weekly activity report was configured, migrate its channel/time
-  // once so the new Daily Digest starts working without another setup step.
-  let legacy = null;
+  let legacyActivity = null;
   if (typeof gateway.getActivityConfig === "function") {
-    legacy = await gateway.getActivityConfig().catch(() => null);
+    legacyActivity = await gateway.getActivityConfig().catch(() => null);
   }
-  if (legacy?.enabled && legacy?.channel_id) {
-    const migrated = {
-      enabled: true,
-      channel_id: String(legacy.channel_id),
-      hour: Number(legacy.hour || 0),
-      minute: Number(legacy.minute || 0),
-      migrated_from_activity_report: true,
-      configured_at: legacy.configured_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    await gateway.ctx.storage.put(DAILY_DIGEST_CONFIG_KEY, migrated);
-    if (typeof gateway.setActivityConfig === "function") {
-      await gateway.setActivityConfig({ ...legacy, enabled: false }).catch(() => {});
-    }
-    return migrated;
+  const oldDaily = await gateway.ctx.storage.get(LEGACY_DAILY_DIGEST_CONFIG_KEY).catch(() => null);
+
+  const source = oldDaily?.channel_id ? oldDaily : legacyActivity;
+  if (!source?.channel_id) return null;
+
+  const fallbackDate = new Date(source.configured_at || source.updated_at || Date.now());
+  const fallbackSchedule = phoenixScheduleParts(fallbackDate);
+  const migrated = {
+    enabled: true,
+    channel_id: String(source.channel_id),
+    // Preserve the original weekly activity weekday whenever it exists.
+    weekday: Number.isInteger(Number(legacyActivity?.weekday))
+      ? Number(legacyActivity.weekday)
+      : fallbackSchedule.weekday,
+    hour: Number.isInteger(Number(legacyActivity?.hour))
+      ? Number(legacyActivity.hour)
+      : Number(source.hour ?? fallbackSchedule.hour),
+    minute: Number.isInteger(Number(legacyActivity?.minute))
+      ? Number(legacyActivity.minute)
+      : Number(source.minute ?? fallbackSchedule.minute),
+    migrated_from: legacyActivity?.channel_id ? "weekly_activity_report" : "daily_digest",
+    configured_at: source.configured_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  await gateway.ctx.storage.put(WEEKLY_DIGEST_CONFIG_KEY, migrated);
+  if (typeof gateway.setActivityConfig === "function" && legacyActivity?.enabled) {
+    await gateway.setActivityConfig({ ...legacyActivity, enabled: false }).catch(() => {});
   }
-  return current || null;
+  return migrated;
 }
 
 export async function disableLegacyActivityReport(gateway) {
@@ -597,41 +646,47 @@ export async function disableLegacyActivityReport(gateway) {
   return { ok: true, changed: true };
 }
 
-export async function claimDailyDigestDate(gateway, dateKey) {
+export async function claimWeeklyDigestDate(gateway, dateKey) {
   const day = String(dateKey || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
-  const current = await gateway.ctx.storage.get(DAILY_DIGEST_LAST_DATE_KEY);
+  const current = await gateway.ctx.storage.get(WEEKLY_DIGEST_LAST_DATE_KEY);
   if (String(current || "") === day) return false;
-  await gateway.ctx.storage.put(DAILY_DIGEST_LAST_DATE_KEY, day);
+  await gateway.ctx.storage.put(WEEKLY_DIGEST_LAST_DATE_KEY, day);
   return true;
 }
 
-export async function releaseDailyDigestDate(gateway, dateKey) {
-  const current = await gateway.ctx.storage.get(DAILY_DIGEST_LAST_DATE_KEY);
+export async function releaseWeeklyDigestDate(gateway, dateKey) {
+  const current = await gateway.ctx.storage.get(WEEKLY_DIGEST_LAST_DATE_KEY);
   if (String(current || "") === String(dateKey || "")) {
-    await gateway.ctx.storage.delete(DAILY_DIGEST_LAST_DATE_KEY);
+    await gateway.ctx.storage.delete(WEEKLY_DIGEST_LAST_DATE_KEY);
   }
   return true;
 }
 
-export async function runDailyDigestScheduler(env, stub) {
+export async function runWeeklyDigestScheduler(env, stub) {
   if (!stub || !env.DISCORD_BOT_TOKEN || !env.DISCORD_GUILD_ID) return;
-  const config = await stub.getDailyDigestConfig().catch(() => null);
+  const config = await stub.getWeeklyDigestConfig().catch(() => null);
   if (!config?.enabled || !config?.channel_id) return;
 
   const now = new Date();
-  const local = phoenixClockParts(now);
-  if (Number(config.hour) !== local.hour || Number(config.minute) !== local.minute) return;
+  const local = phoenixScheduleParts(now);
+  if (
+    Number(config.weekday) !== local.weekday ||
+    Number(config.hour) !== local.hour ||
+    Number(config.minute) !== local.minute
+  ) return;
 
   const today = phoenixDateKey(now);
-  const claimed = await stub.claimDailyDigestDate(today).catch(() => false);
+  const claimed = await stub.claimWeeklyDigestDate(today).catch(() => false);
   if (!claimed) return;
 
   try {
-    await postDailyDigest(env, stub, String(config.channel_id), { manual: false });
+    // The member scan and previous-7-day activity read happen right now,
+    // at the scheduled weekly send time.
+    await postWeeklyDigest(env, stub, String(config.channel_id), { manual: false });
   } catch (error) {
-    await stub.releaseDailyDigestDate(today).catch(() => {});
-    console.error("Daily Digest failed:", error);
+    await stub.releaseWeeklyDigestDate(today).catch(() => {});
+    console.error("Weekly Digest failed:", error);
     throw error;
   }
 }
@@ -887,8 +942,8 @@ async function runV40Audit(interaction, env, stub) {
 
 async function runV40Queue(interaction, env, stub) {
   const runtime = await buildV40Runtime(env, stub);
-  const payload = buildDailyDigestPayload(runtime.model, {
-    title: "📊 Dojo Daily Digest",
+  const payload = buildWeeklyDigestPayload(runtime.model, {
+    title: "📊 Dojo Weekly Digest",
     footer: "Needs check = no first win OR 0 messages in the previous 7 completed Arizona days.",
   });
   await editOriginalInteraction(interaction, env, payload);
@@ -1629,12 +1684,17 @@ function escapeDiscord(value) {
     .replace(/~/g, "\\~");
 }
 
-function phoenixClockParts(date) {
+function phoenixScheduleParts(date) {
   const shifted = new Date(date.getTime() - 7 * 60 * 60 * 1000);
   return {
+    weekday: shifted.getUTCDay(),
     hour: shifted.getUTCHours(),
     minute: shifted.getUTCMinutes(),
   };
+}
+
+function weekdayName(weekday) {
+  return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][Number(weekday)] || "Unknown day";
 }
 
 function phoenixDateKey(date) {
@@ -1653,7 +1713,7 @@ function safeError(error) {
 }
 
 export const __test = Object.freeze({
-  buildDailyDigestPayload,
+  buildWeeklyDigestPayload,
   buildCheckinPrompt,
   buildProposedDm,
   checkinButtons,

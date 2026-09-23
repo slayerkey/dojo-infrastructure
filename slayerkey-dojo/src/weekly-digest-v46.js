@@ -96,6 +96,7 @@ export function buildWeeklyDigestPayload(model, options = {}) {
   appendDigestGroup(embeds, "👋 ONBOARDED · NOT IN COMMUNITY", onboardedNotSocial);
   appendDigestGroup(embeds, "💤 LAPSED · 0 MSGS / 7D", lapsed);
   appendDigestGroup(embeds, "🏆 ACTIVE · NO FIRST WIN", activeNoWin);
+  appendDigestGroup(embeds, "✅ FIRST WIN POSTED", activated);
 
   if (!neverStarted.length && !onboardedNotSocial.length && !lapsed.length && !activeNoWin.length) {
     embeds.push({

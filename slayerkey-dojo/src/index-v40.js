@@ -56,6 +56,8 @@ export default {
           commands: [
             "/activation-audit",
             "/activation-queue",
+            "/daily-digest",
+            "/daily-digest-setup",
             "/activation-checkin-preview",
             "/wincheckin",
             "/teamapply",

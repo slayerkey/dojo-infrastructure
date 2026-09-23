@@ -55,6 +55,7 @@ export default {
             "replied_to_two_members",
             "first_training_post",
             "first_general_message",
+            "community_participated",
             "goal_posted",
             "riot_linked",
             "first_win_posted",
@@ -64,11 +65,11 @@ export default {
         body.discord.roadmap = {
           version: "v41",
           persistent_card: true,
-          personal_ephemeral_progress: true,
+          progress_visibility: "configurable; defaults public for current testing",
           live_activation_checks: true,
           manual_checklist_items: true,
           new_polling_cron: false,
-          commands: ["/roadmap", "/roadmap-setup", "/roadmap-preview"],
+          commands: ["/roadmap", "/roadmap-setup", "/roadmap-preview", "/roadmap-visibility"],
         };
         return Response.json(body, { status: response.status });
       } catch {

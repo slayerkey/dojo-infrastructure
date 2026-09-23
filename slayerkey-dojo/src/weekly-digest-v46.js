@@ -142,6 +142,14 @@ export function formatDigestMember(member) {
   const stage = Number(member?.task_stage || 0);
   const task = stage > 0 ? `#${stage}` : "—";
 
+  const responseLabels = {
+    community_still_improving: "Still improving",
+    snooze: "Hasn't played much",
+    stuck: "Stuck",
+    community_break: "Taking a break",
+  };
+  const response = responseLabels[member?.last_intervention] || null;
+
   return [
     "• " + mention,
     fallback,
@@ -150,7 +158,8 @@ export function formatDigestMember(member) {
     `Task ${task}`,
     `Win ${win}`,
     `7d **${count}**`,
-  ].join(" · ");
+    response ? `Reply: **${response}**` : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function chunkTextLines(lines, maxLength) {

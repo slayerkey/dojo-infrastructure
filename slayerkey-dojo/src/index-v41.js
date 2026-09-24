@@ -30,6 +30,46 @@ export default {
       return handleCustomerIdentityBridge(request, env);
     }
 
+    if (url.pathname === "/internal/whop-payment-shape" && request.method === "GET") {
+      const paymentId = String(url.searchParams.get("payment_id") || "");
+      if (paymentId !== "pay_UlAO5R8dHeCrWZ") {
+        return Response.json({ ok: false, error: "Not found." }, { status: 404 });
+      }
+      const apiKey = String(env.WHOP_API_KEY || "").trim();
+      if (!apiKey) return Response.json({ ok: false, error: "Whop API unavailable." }, { status: 503 });
+      const response = await fetch(`https://api.whop.com/api/v1/payments/${encodeURIComponent(paymentId)}`, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Api-Version-Date": "2026-09-22-2",
+          Accept: "application/json",
+        },
+      });
+      let payment = null;
+      try { payment = await response.json(); } catch {}
+      const user = payment?.user;
+      const company = payment?.company;
+      const metadata = payment?.metadata;
+      return Response.json({
+        ok: response.ok,
+        http_status: response.status,
+        top_level_keys: payment && typeof payment === "object" ? Object.keys(payment).sort() : [],
+        user_type: Array.isArray(user) ? "array" : typeof user,
+        user_keys: user && typeof user === "object" && !Array.isArray(user) ? Object.keys(user).sort() : [],
+        user_id_present: Boolean(user && typeof user === "object" && !Array.isArray(user) && user.id),
+        user_scalar_present: typeof user === "string" && user.length > 0,
+        company_type: Array.isArray(company) ? "array" : typeof company,
+        company_keys: company && typeof company === "object" && !Array.isArray(company) ? Object.keys(company).sort() : [],
+        company_id_present: Boolean(company && typeof company === "object" && !Array.isArray(company) && company.id),
+        metadata_type: Array.isArray(metadata) ? "array" : typeof metadata,
+        metadata_keys: metadata && typeof metadata === "object" && !Array.isArray(metadata) ? Object.keys(metadata).sort() : [],
+        posthog_distinct_id_present: Boolean(metadata && typeof metadata === "object" && metadata.posthog_distinct_id),
+        status_present: Boolean(payment?.status),
+        substatus_present: Boolean(payment?.substatus),
+        paid_at_present: Boolean(payment?.paid_at),
+      });
+    }
+
+
     if (url.pathname === "/discord/interactions" && request.method === "POST") {
       const roadmapCopy = request.clone();
       const delegated = request.clone();

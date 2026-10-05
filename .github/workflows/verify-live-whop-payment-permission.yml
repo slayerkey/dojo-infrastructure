@@ -1,0 +1,17 @@
+name: Verify Live Whop Payment Permission
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Probe live payment read permission
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS --max-time 20 'https://slayerkey-dojo.mystd.workers.dev/internal/whop-payment-shape?payment_id=pay_UlAO5R8dHeCrWZ')"
+          echo "$body" | jq '{ok,http_status,user_id_present,metadata_type,posthog_distinct_id_present,status_present,paid_at_present}'

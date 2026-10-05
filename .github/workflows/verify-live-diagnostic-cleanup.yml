@@ -1,0 +1,21 @@
+name: Verify Live Diagnostic Cleanup
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify live Worker cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          diag_status="$(curl -sS --max-time 15 -o /tmp/diag -w '%{http_code}' 'https://slayerkey-dojo.mystd.workers.dev/internal/whop-payment-shape?payment_id=pay_UlAO5R8dHeCrWZ')"
+          health="$(curl -fsS --max-time 15 'https://slayerkey-dojo.mystd.workers.dev/health')"
+          echo "diagnostic_http=$diag_status"
+          echo "$health" | jq '{journey:.discord.customer_journey.version,posthog_configured:.discord.customer_journey.posthog_configured,identity_bridge_configured:.discord.customer_journey.identity_bridge_configured}'
+          test "$diag_status" = "404"
+          echo "$health" | jq -e '.discord.customer_journey.version == "posthog-v1" and .discord.customer_journey.posthog_configured == true' >/dev/null

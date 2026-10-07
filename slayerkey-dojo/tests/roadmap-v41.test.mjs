@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import worker from "../src/index-v41.js";
 import {
   FUNDAMENTALS_URL,
   ONBOARDING_URL,
@@ -64,6 +65,30 @@ test("channel resolver never prefers old-introductions over the live introductio
   assert.equal(result.channels.introductions, "live");
   assert.equal(roadmap.roadmapChannelMatchScore("old-introductions", ["introductions"]), 0);
   assert.equal(roadmap.roadmapChannelMatchScore("👋┃introductions", ["introductions"]), 100);
+});
+
+test("v41 routes roadmap slash commands before the legacy interaction chain", async () => {
+  const request = new Request("https://example.com/discord/interactions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Signature-Ed25519": "00",
+      "X-Signature-Timestamp": "1",
+    },
+    body: JSON.stringify({
+      type: 2,
+      guild_id: "guild",
+      data: { name: "roadmap" },
+    }),
+  });
+
+  const response = await worker.fetch(request, {
+    DISCORD_PUBLIC_KEY: "00",
+    DISCORD_GUILD_ID: "guild",
+  }, {});
+
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "Invalid request signature");
 });
 
 test("roadmap preview and visibility commands are registered", () => {

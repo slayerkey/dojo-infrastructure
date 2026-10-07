@@ -26,6 +26,14 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (url.pathname === "/discord/interactions" && request.method === "POST") {
+      const roadmapCopy = request.clone();
+      const delegated = request.clone();
+      const response = await handleRoadmapV41Interaction(roadmapCopy, env, ctx);
+      if (response) return response;
+      return legacy.fetch(delegated, env, ctx);
+    }
+
     if (url.pathname === "/internal/customer-identity") {
       return handleCustomerIdentityBridge(request, env);
     }

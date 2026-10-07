@@ -1,0 +1,17 @@
+name: Verify Live Whop Payment Shape
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read safe live payment shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS --max-time 20 'https://slayerkey-dojo.mystd.workers.dev/internal/whop-payment-shape?payment_id=pay_UlAO5R8dHeCrWZ')"
+          echo "$body" | jq .

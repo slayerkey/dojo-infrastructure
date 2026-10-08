@@ -8,6 +8,7 @@ import {
   ROADMAP_COMMANDS,
   __test as roadmap,
   getRoadmapV41State,
+  updateRoadmapV41Test,
 } from "../src/roadmap-v41.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
@@ -425,4 +426,113 @@ test("Fundamentals progress treats later month tags as completed Days 1-7", () =
   assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 4 } }), 4);
   assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 8 } }), 7);
   assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 9 } }), 7);
+});
+
+
+test("section refresh controls use a unique custom id instead of duplicating the active tab id", () => {
+  const fundamentals = roadmap.sectionRefreshRow("fundamentals");
+  const monthOne = roadmap.sectionRefreshRow("month1");
+  assert.equal(fundamentals.components[0].custom_id, "roadmap:v41:refresh-section:fundamentals");
+  assert.equal(monthOne.components[0].custom_id, "roadmap:v41:refresh-section:month1");
+  assert.notEqual(fundamentals.components[0].custom_id, "roadmap:v41:section:fundamentals");
+  assert.notEqual(monthOne.components[0].custom_id, "roadmap:v41:section:month1");
+});
+
+test("calendar progress cells stay high-level", () => {
+  assert.equal(roadmap.progressCells(5, 2), "✅ ✅ ⬜ ⬜ ⬜");
+  assert.equal(roadmap.progressCells(5, 4, 4), "✅ ✅ ✅ ✅ 🔒");
+});
+
+test("owner test mode can step forward and backward without touching member progress", async () => {
+  const store = storage();
+  const gateway = { ctx: { storage: store.api } };
+
+  let result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "next");
+  assert.equal(result.ok, true);
+  assert.equal(result.state.fundamentals_stage, 1);
+
+  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "next");
+  assert.equal(result.state.fundamentals_stage, 2);
+
+  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "prev");
+  assert.equal(result.state.fundamentals_stage, 1);
+
+  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "reset");
+  assert.equal(result.state.fundamentals_stage, 0);
+  assert.equal(store.values.has("roadmap:v41:manual:owner"), false);
+});
+
+test("owner test state drives Fundamentals and Month One previews", () => {
+  assert.equal(roadmap.fundamentalsProgress({
+    test_mode: true,
+    test_state: { fundamentals_stage: 5 },
+    task_stage: { stage: 1 },
+  }), 5);
+
+  const monthOne = roadmap.buildMonthOneModel({
+    test_mode: true,
+    test_state: { month1_stage: 3 },
+    manual: { completed: [] },
+    tenure: null,
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  assert.equal(monthOne.completed, 3);
+  assert.equal(monthOne.next.key, "month1_2ss");
+  assert.equal(monthOne.checkpoint_eligible, true);
+});
+
+test("early Month 2 - DM Review does not become valid later unless it was submitted after unlock", () => {
+  const completed = [
+    "month1_aim_mastery",
+    "month1_crosshair",
+    "month1_movement",
+    "month1_2ss",
+  ];
+
+  const early = roadmap.buildMonthOneModel({
+    manual: { completed },
+    tenure: { first_eligible_at: "2026-09-15T12:00:00.000Z", is_annual: false },
+    task_stage: {
+      stage: 9,
+      label: "Month 2 - DM Review",
+      observed_at: "2026-10-01T12:00:00.000Z",
+    },
+  }, new Date("2026-10-20T12:00:00.000Z"));
+
+  assert.equal(early.checkpoint_eligible, true);
+  assert.equal(early.checkpoint_submitted, true);
+  assert.equal(early.checkpoint_submission_eligible, false);
+  assert.equal(early.completed, 4);
+
+  const valid = roadmap.buildMonthOneModel({
+    manual: { completed },
+    tenure: { first_eligible_at: "2026-09-15T12:00:00.000Z", is_annual: false },
+    task_stage: {
+      stage: 9,
+      label: "Month 2 - DM Review",
+      observed_at: "2026-10-16T12:00:00.000Z",
+    },
+  }, new Date("2026-10-20T12:00:00.000Z"));
+
+  assert.equal(valid.checkpoint_submission_eligible, true);
+  assert.equal(valid.completed, 5);
+});
+
+test("owner test current task moves from Fundamentals into Month One", () => {
+  const activation = roadmap.buildRoadmapModel({
+    activation: {},
+    config: { channels: {} },
+  });
+
+  const state = {
+    test_mode: true,
+    test_state: { fundamentals_stage: 7, month1_stage: 0 },
+    config: { channels: {} },
+  };
+  const monthOne = roadmap.buildMonthOneModel(state, new Date("2026-10-08T00:00:00.000Z"));
+  const current = roadmap.currentRoadmapTask(state, activation, 7, monthOne);
+
+  assert.equal(current.label, "Aim Mastery Course");
+  assert.equal(current.test_section, "month1");
 });

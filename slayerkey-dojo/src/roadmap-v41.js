@@ -10,6 +10,7 @@ const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
 const CONFIG_KEY = "roadmap:v41:config";
 const MANUAL_PREFIX = "roadmap:v41:manual:";
+const TEST_PREFIX = "roadmap:v41:test:";
 const COMMAND_STATE_KEY = "roadmap:v41:command-registration";
 const TEAM_APPLICATION_PREFIX = "teamapp:v40:application:";
 const COMMAND_RECHECK_MS = 6 * 60 * 60 * 1000;
@@ -142,6 +143,51 @@ export async function handleRoadmapV41Interaction(request, env) {
         ? "Roadmap progress is now **public** when members use /roadmap or View My Progress. Use /roadmap-visibility private later to switch it back."
         : "Roadmap progress is now **private/ephemeral** again.",
     );
+  }
+
+  if (customId.startsWith("roadmap:v41:test-current:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const [, , , section, action] = customId.split(":");
+    if (!["fundamentals", "month1"].includes(section) || !["prev", "next", "reset"].includes(action)) {
+      return ephemeralMessage("Unknown roadmap test control.");
+    }
+    try {
+      const current = await stub.getRoadmapV41State(userId, true, true);
+      if (!current?.test_mode) return ephemeralMessage("Owner Test Mode is not active for this account.");
+      await stub.updateRoadmapV41Test(userId, section, action);
+      const view = await buildRoadmapView(userId, env, stub, true, true);
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't update Owner Test Mode: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:test:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const [, , , section, action] = customId.split(":");
+    if (!["fundamentals", "month1"].includes(section) || !["prev", "next", "reset"].includes(action)) {
+      return ephemeralMessage("Unknown roadmap test control.");
+    }
+    try {
+      const current = await stub.getRoadmapV41State(userId, true, true);
+      if (!current?.test_mode) return ephemeralMessage("Owner Test Mode is not active for this account.");
+      await stub.updateRoadmapV41Test(userId, section, action);
+      const view = await buildRoadmapSectionView(userId, env, stub, section, true);
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't update Owner Test Mode: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:refresh-section:")) {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
+    const section = String(customId.slice("roadmap:v41:refresh-section:".length) || "overview");
+    try {
+      const view = await buildRoadmapSectionView(userId, env, stub, section, isOwner(userId, env));
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't refresh that roadmap section: ${safeError(error)}`);
+    }
   }
 
   if (customId === "roadmap:v41:full" || customId.startsWith("roadmap:v41:section:")) {
@@ -282,7 +328,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
   const userId = String(discordUserId || "");
   if (!userId) return { ok: false, message: "Missing Discord user." };
 
-  const [tenure, activation, manual, teamApplication, config, taskStage] = await Promise.all([
+  const [tenure, activation, manual, teamApplication, config, taskStage, testState] = await Promise.all([
     gateway.getTenureRecord?.(userId).catch(() => null),
     gateway.ctx.storage.get(`${MEMBER_PREFIX}${userId}`),
     gateway.ctx.storage.get(`${MANUAL_PREFIX}${userId}`),
@@ -291,6 +337,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
     typeof gateway.getTaskStageV47 === "function"
       ? gateway.getTaskStageV47(userId).catch(() => null)
       : Promise.resolve(null),
+    gateway.ctx.storage.get(`${TEST_PREFIX}${userId}`),
   ]);
 
   let roleFallback = false;
@@ -317,6 +364,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
         team_application: null,
         task_stage: taskStage || null,
         tenure: tenure || null,
+        test_state: testState || null,
         config: config || null,
       };
     }
@@ -358,6 +406,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
       : null,
     task_stage: taskStage || null,
     tenure: tenure || null,
+    test_state: testState || null,
     config: config || null,
   };
 }
@@ -417,6 +466,27 @@ export async function setRoadmapV41Config(gateway, config) {
 
 export async function getRoadmapV41Config(gateway) {
   return (await gateway.ctx.storage.get(CONFIG_KEY)) || null;
+}
+
+export async function updateRoadmapV41Test(gateway, discordUserId, section, action) {
+  const userId = String(discordUserId || "");
+  if (!userId) return { ok: false, message: "Missing Discord user." };
+  const key = `${TEST_PREFIX}${userId}`;
+  const previous = (await gateway.ctx.storage.get(key)) || {};
+  const next = { ...previous };
+
+  const field = section === "fundamentals" ? "fundamentals_stage" : "month1_stage";
+  const max = section === "fundamentals" ? 7 : 5;
+  const current = Number.isFinite(Number(next[field])) ? Number(next[field]) : 0;
+
+  if (action === "next") next[field] = Math.min(max, current + 1);
+  else if (action === "prev") next[field] = Math.max(0, current - 1);
+  else if (action === "reset") next[field] = 0;
+  else return { ok: false, message: "Unknown test action." };
+
+  next.updated_at = new Date().toISOString();
+  await gateway.ctx.storage.put(key, next);
+  return { ok: true, state: next };
 }
 
 async function setupRoadmapCard(interaction, env, stub) {
@@ -692,62 +762,60 @@ export function buildRoadmapModel(state) {
 async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRoleFallback = false) {
   const state = await stub.getRoadmapV41State(userId, allowPreview, allowRoleFallback);
   if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
-  const model = buildRoadmapModel(state);
 
-  const description = model.win_complete
-    ? `**Progress:** ${model.completed}/${model.total}\n🏆 **First Win:** ✅ Complete${model.win_within_7_days ? " within 7 days" : ""}`
-    : `**Progress:** ${model.completed}/${model.total}\n🏆 **First Win:** ⬜ Not yet`;
+  const activationModel = buildRoadmapModel(state);
+  const fundamentalsDone = fundamentalsProgress(state);
+  const monthOne = buildMonthOneModel(state);
+  const knownDone = fundamentalsDone + monthOne.completed;
+  const knownTotal = 7 + monthOne.total;
+  const knownPercent = Math.round((knownDone / knownTotal) * 100);
+  const current = currentRoadmapTask(state, activationModel, fundamentalsDone, monthOne);
 
-  const fields = [];
-  if (model.next) {
-    fields.push({
-      name: "☑️ Next Task",
-      value: `**${model.next.label}**${model.next.link ? `\n${model.next.link}` : ""}`,
-      inline: false,
-    });
-  } else {
-    fields.push({
-      name: "✅ Starter Roadmap Complete",
-      value: "Keep following the full 90-day roadmap and keep stacking wins.",
-      inline: false,
-    });
-  }
-
-  if (model.task_stage?.stage) {
-    fields.push({
-      name: "🧪 Fundamentals Task Stage",
-      value: `**${model.task_stage.label || `Task #${model.task_stage.stage}`}** · highest tagged task submission observed`,
-      inline: false,
-    });
-  }
+  const fields = [{
+    name: current?.locked ? "🔒 Current Task" : "☑️ Current Task",
+    value: current
+      ? `**${current.label}**${current.note ? `\n${current.note}` : ""}`
+      : "**Month 1 complete.** Month 2 tracking will be added as we finish that section.",
+    inline: false,
+  }];
 
   if (state.test_mode) {
     fields.push({
-      name: "Owner Test Mode",
-      value: "This behaves like a real roadmap account for testing, but it is excluded from member activation analytics.",
+      name: "🧪 Owner Test Mode",
+      value: "Use **Test Complete** to move forward one task and **Test Back** to move backward without changing member data.",
       inline: false,
     });
   }
 
-  const components = [];
   const primary = [];
-  if (!model.win_complete && model.next?.key === "wins") {
-    primary.push({
-      type: 2,
-      style: 3,
-      custom_id: "actv40:win",
-      label: "Post My First Win",
-      emoji: { name: "🏆" },
-    });
-  } else if (model.next?.channel_id) {
+  if (current?.url) {
     primary.push({
       type: 2,
       style: 5,
-      url: discordChannelUrl(env.DISCORD_GUILD_ID, model.next.channel_id),
+      url: current.url,
+      label: "Open Task",
+      emoji: { name: "☑️" },
+    });
+  } else if (current?.channel_id) {
+    primary.push({
+      type: 2,
+      style: 5,
+      url: discordChannelUrl(env.DISCORD_GUILD_ID, current.channel_id),
       label: "Open Task",
       emoji: { name: "☑️" },
     });
   }
+
+  if (current?.manual_key && !state.test_mode) {
+    primary.push({
+      type: 2,
+      style: 3,
+      custom_id: `roadmap:v41:complete:${current.manual_key}`,
+      label: "Mark Complete",
+      emoji: { name: "✅" },
+    });
+  }
+
   primary.push({
     type: 2,
     style: 2,
@@ -755,44 +823,87 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     label: "Refresh",
     emoji: { name: "🔄" },
   });
-  components.push({ type: 1, components: primary });
+  primary.push({
+    type: 2,
+    style: 1,
+    custom_id: "roadmap:v41:full",
+    label: "View Full 90 Days",
+    emoji: { name: "🗺️" },
+  });
 
-  const resources = [
-    { type: 2, style: 5, url: ONBOARDING_URL, label: "Onboarding", emoji: { name: "👋" } },
-    { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Fundamentals", emoji: { name: "🧪" } },
-  ];
-  if (model.channels?.start_here) {
-    resources.push({
-      type: 2,
-      style: 5,
-      url: discordChannelUrl(env.DISCORD_GUILD_ID, model.channels.start_here),
-      label: "Full Roadmap",
-      emoji: { name: "🗺️" },
+  const components = [{ type: 1, components: primary.slice(0, 5) }];
+
+  if (state.test_mode && current?.test_section) {
+    components.push({
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 2,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:prev`,
+          label: "Test Back",
+          emoji: { name: "◀️" },
+        },
+        {
+          type: 2,
+          style: 3,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:next`,
+          label: "Test Complete",
+          emoji: { name: "✅" },
+        },
+        {
+          type: 2,
+          style: 4,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:reset`,
+          label: "Reset Test",
+          emoji: { name: "↩️" },
+        },
+      ],
     });
   }
-  components.push({ type: 1, components: resources });
-  components.push({
-    type: 1,
-    components: [{
-      type: 2,
-      style: 1,
-      custom_id: "roadmap:v41:full",
-      label: "View Full 90 Days",
-      emoji: { name: "🗺️" },
-    }],
-  });
 
   return {
     content: "",
     embeds: [{
       title: "🧭 Your Dojo Roadmap",
-      description,
+      description: `**90-Day Progress:** ${knownDone}/${knownTotal} known tasks · **${knownPercent}%**`,
       fields,
       footer: {
-        text: "Finish the task, then hit Refresh. Automatic steps check themselves off.",
+        text: "Finish the current task, then Refresh. The roadmap always reads your latest progress.",
       },
     }],
     components,
+  };
+}
+
+function currentRoadmapTask(state, activationModel, fundamentalsDone, monthOne) {
+  if (!state?.test_mode && activationModel.next) {
+    return {
+      label: activationModel.next.label,
+      channel_id: activationModel.next.channel_id,
+      note: "Complete this setup step first.",
+    };
+  }
+
+  if (fundamentalsDone < 7) {
+    return {
+      label: `Fundamentals Day ${fundamentalsDone + 1}`,
+      url: FUNDAMENTALS_URL,
+      note: "Complete the next Fundamentals task.",
+      test_section: state?.test_mode ? "fundamentals" : null,
+    };
+  }
+
+  const next = monthOne.next;
+  if (!next) return null;
+  return {
+    label: next.label,
+    url: next.links?.[0]?.url || null,
+    channel_id: next.key === "month1_checkpoint" && !next.locked ? state?.config?.channels?.tasks || null : null,
+    note: next.instructions,
+    locked: Boolean(next.locked),
+    manual_key: MONTH_ONE_MANUAL_VALUES.has(next.key) ? next.key : null,
+    test_section: state?.test_mode ? "month1" : null,
   };
 }
 
@@ -802,55 +913,69 @@ export function buildMonthOneModel(state, now = new Date()) {
   const isAnnual = Boolean(tenure?.is_annual);
   const monthlyEligible = Boolean(tenure?.first_eligible_at) && fullMonthsSince(tenure.first_eligible_at, now) >= 1;
   const checkpointEligible = Boolean(state?.test_mode || isAnnual || monthlyEligible);
+  const testStage = state?.test_mode
+    ? Math.max(0, Math.min(5, Number(state?.test_state?.month1_stage || 0)))
+    : null;
+
   const stage = Number(state?.task_stage?.stage || 0);
   const stageLabel = String(state?.task_stage?.label || "");
   const exactMonthTwoReview = stage === 9 && /month\s*2/i.test(stageLabel) && /dm\s*review/i.test(stageLabel);
   const checkpointSubmitted = stage > 9 || exactMonthTwoReview;
-  const checkpointComplete = checkpointEligible && checkpointSubmitted;
+  const submittedAt = Date.parse(state?.task_stage?.observed_at || "");
+  const unlockAt = monthUnlockTimestamp(tenure?.first_eligible_at);
+  const submissionWasEligible = Boolean(
+    isAnnual ||
+    (monthlyEligible && (!Number.isFinite(submittedAt) || !Number.isFinite(unlockAt) || submittedAt >= unlockAt))
+  );
+  const checkpointComplete = state?.test_mode
+    ? testStage >= 5
+    : checkpointEligible && checkpointSubmitted && submissionWasEligible;
 
-  const tasks = [
+  const definitions = [
     {
       key: "month1_aim_mastery",
       label: "Aim Mastery Course",
-      done: completedManual.has("month1_aim_mastery"),
       instructions: "Complete the Aim Mastery Course before starting the focused mechanics blocks.",
       links: [{ label: "Aim Mastery Course", url: AIM_MASTERY_URL }],
     },
     {
       key: "month1_crosshair",
       label: "Crosshair Placement",
-      done: completedManual.has("month1_crosshair"),
       instructions: "Watch the exercise, then do 2 Sheriff DMs/day for 5 days focused on crosshair placement and replacement.",
       links: [{ label: "Crosshair Exercise", url: CROSSHAIR_TRAINING_URL }],
     },
     {
       key: "month1_movement",
       label: "Movement",
-      done: completedManual.has("month1_movement"),
       instructions: "Watch the drills, then do 15 minutes in customs for 3 days: pathing, isolating 1v1s, and preparing for common angles.",
       links: [{ label: "Movement Drills", url: MOVEMENT_TRAINING_URL }],
     },
     {
       key: "month1_2ss",
       label: "2SS",
-      done: completedManual.has("month1_2ss"),
       instructions: "For 5 days: do the Range/Aim Lab aim-training drills, then 3 Vandal DMs/day practicing 2SS.",
       links: [
         { label: "2SS Breakdown", url: TWO_SS_BREAKDOWN_URL },
         { label: "Aim + 2SS Drills", url: AIM_TRAINING_2SS_URL },
       ],
     },
-    {
-      key: "month1_checkpoint",
-      label: "Mechanics Checkpoint",
-      done: checkpointComplete,
-      locked: !checkpointEligible,
-      instructions: checkpointEligible
-        ? "Submit one task in the training forum using the **Month 2 - DM Review** flair. Submission is enough to complete the checkpoint."
-        : "Unlocks after one full month in the Dojo. Annual members unlock this immediately.",
-      links: [],
-    },
   ];
+
+  const tasks = definitions.map((definition, index) => ({
+    ...definition,
+    done: state?.test_mode ? testStage >= index + 1 : completedManual.has(definition.key),
+  }));
+
+  tasks.push({
+    key: "month1_checkpoint",
+    label: "Mechanics Checkpoint",
+    done: checkpointComplete,
+    locked: !checkpointEligible,
+    instructions: checkpointEligible
+      ? "Submit one task in the training forum using the **Month 2 - DM Review** flair. Submission is enough to complete the checkpoint."
+      : "Unlocks after one full month in the Dojo. Annual members unlock this immediately.",
+    links: [],
+  });
 
   return {
     tasks,
@@ -859,12 +984,36 @@ export function buildMonthOneModel(state, now = new Date()) {
     next: tasks.find((item) => !item.done) || null,
     checkpoint_eligible: checkpointEligible,
     checkpoint_submitted: checkpointSubmitted,
+    checkpoint_submission_eligible: submissionWasEligible,
     is_annual: isAnnual,
     monthly_eligible: monthlyEligible,
   };
 }
 
+function monthUnlockTimestamp(firstEligibleAt) {
+  const start = new Date(firstEligibleAt || "");
+  if (!Number.isFinite(start.getTime())) return NaN;
+  const year = start.getUTCFullYear();
+  const month = start.getUTCMonth() + 1;
+  const targetYear = year + Math.floor(month / 12);
+  const targetMonth = month % 12;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const day = Math.min(start.getUTCDate(), lastDay);
+  return Date.UTC(
+    targetYear,
+    targetMonth,
+    day,
+    start.getUTCHours(),
+    start.getUTCMinutes(),
+    start.getUTCSeconds(),
+    start.getUTCMilliseconds(),
+  );
+}
+
 function fundamentalsProgress(state) {
+  if (state?.test_mode) {
+    return Math.max(0, Math.min(7, Number(state?.test_state?.fundamentals_stage || 0)));
+  }
   const stage = Number(state?.task_stage?.stage || 0);
   if (stage >= 8) return 7;
   return Math.max(0, Math.min(7, stage));
@@ -895,148 +1044,133 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
   const state = await stub.getRoadmapV41State(userId, allowPreview, true);
   if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
 
-  const activationModel = buildRoadmapModel(state);
   const monthOne = buildMonthOneModel(state);
   const fundamentalsDone = fundamentalsProgress(state);
+  const knownDone = fundamentalsDone + monthOne.completed;
+  const knownTotal = 7 + monthOne.total;
+  const overallPercent = Math.round((knownDone / knownTotal) * 100);
   const components = [roadmapSectionNavigation(section)];
   let embed;
 
   if (section === "fundamentals") {
-    const labels = [
-      "Pick one agent",
-      "Review your Tracker",
-      "Find a duo",
-      "Build your routine",
-      "Apply the Rule of 2",
-      "Learn 2SS Fighting",
-      "Use the LEAD Method",
-    ];
     embed = {
-      title: "7️⃣ Days 1–7 — Fundamentals Sprint",
-      description: `**Progress: ${fundamentalsDone}/7**\n\n${labels.map((label, index) => `${fundamentalsDone >= index + 1 ? "✅" : "⬜"} **Day ${index + 1}:** ${label}`).join("\n")}`,
-      footer: { text: "Your highest tagged Fundamentals task updates this automatically." },
+      title: "7️⃣ Days 1–7",
+      description: [
+        `**${fundamentalsDone}/7 complete · ${Math.round((fundamentalsDone / 7) * 100)}%**`,
+        "",
+        progressCells(7, fundamentalsDone),
+      ].join("\n"),
+      footer: { text: "High-level progress only. Use /roadmap for the current task." },
     };
-    components.push({
-      type: 1,
-      components: [
-        { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Open Fundamentals", emoji: { name: "🧪" } },
-        { type: 2, style: 2, custom_id: "roadmap:v41:section:fundamentals", label: "Refresh", emoji: { name: "🔄" } },
-      ],
-    });
+    components.push(sectionRefreshRow("fundamentals"));
+    if (state.test_mode) components.push(ownerTestRow("fundamentals"));
   } else if (section === "month1") {
-    const taskLines = monthOne.tasks.map((item, index) => {
-      const status = item.done ? "✅" : item.locked ? "🔒" : "⬜";
-      return `${status} **${index + 1}. ${item.label}**\n${item.instructions}`;
-    });
     embed = {
-      title: "🎯 Month 1 — Mechanics",
-      description: `**Progress: ${monthOne.completed}/${monthOne.total}**\n\n${taskLines.join("\n\n")}`,
-      footer: { text: "Training blocks are trust-based. Finish the block, then mark it complete." },
+      title: "🎯 Month 1",
+      description: [
+        `**${monthOne.completed}/${monthOne.total} complete · ${Math.round((monthOne.completed / monthOne.total) * 100)}%**`,
+        "",
+        progressCells(monthOne.total, monthOne.completed, monthOne.next?.locked ? monthOne.completed : -1),
+      ].join("\n"),
+      footer: { text: "High-level progress only. Use /roadmap for the current task." },
     };
-
-    const next = monthOne.next;
-    if (next) {
-      const actions = [];
-      for (const link of next.links || []) {
-        actions.push({ type: 2, style: 5, url: link.url, label: link.label });
-      }
-      if (MONTH_ONE_MANUAL_VALUES.has(next.key)) {
-        actions.push({
-          type: 2,
-          style: 3,
-          custom_id: `roadmap:v41:complete:${next.key}`,
-          label: "Mark Complete",
-          emoji: { name: "✅" },
-        });
-      } else if (next.key === "month1_checkpoint" && !next.locked && state?.config?.channels?.tasks) {
-        actions.push({
-          type: 2,
-          style: 5,
-          url: discordChannelUrl(env.DISCORD_GUILD_ID, state.config.channels.tasks),
-          label: "Submit Checkpoint",
-          emoji: { name: "🏁" },
-        });
-      }
-      actions.push({
-        type: 2,
-        style: 2,
-        custom_id: "roadmap:v41:section:month1",
-        label: "Refresh",
-        emoji: { name: "🔄" },
-      });
-      components.push({ type: 1, components: actions.slice(0, 5) });
-    }
+    components.push(sectionRefreshRow("month1"));
+    if (state.test_mode) components.push(ownerTestRow("month1"));
   } else if (section === "month2") {
     embed = {
-      title: "🧠 Month 2 — Agent Hyperfocus",
-      description: [
-        "**Days 30–40 — Pro Agent Study**",
-        "• Pick **1 agent + 1 map** to start.",
-        "• Alternate one day of study with one day of practice/application.",
-        "• After reviewing a map twice, decide whether to continue or move to the next map.",
-        "",
-        "**Days 40–50 — Keep Hyperfocusing**",
-        "• Continue the same study → practice → apply loop across the maps you need.",
-        "",
-        "**Days 50–60 — Build & Improve Your Playbook**",
-        "• Turn what you learned into repeatable plans and improve them through real games.",
-        "• **Day 60:** Submit your playbook.",
-      ].join("\n"),
-      footer: { text: "Month 2 tracking will be connected after we lock the exact task/checkpoint details." },
+      title: "🧠 Month 2",
+      description: "**Tracking not wired yet.**\n\nThis section will start filling in as we build Month 2.",
+      footer: { text: "The roadmap view stays high-level; task instructions live in /roadmap." },
     };
   } else if (section === "month3") {
     embed = {
-      title: "🔍 Month 3 — Review & Improve",
-      description: [
-        "**Days 60–90 — Learn to improve yourself**",
-        "• Learn how to VOD review.",
-        "• Build an improvement mindset.",
-        "• Learn where to get your VOD reviewed and when outside coaching helps.",
-        "• Review → identify the problem → work on it → review again.",
-        "",
-        "**Day 90 Checkpoint**",
-        "Submit your VOD review notes/session and who you reviewed with.",
-      ].join("\n"),
-      footer: { text: "Month 3 tracking will be connected after we lock the exact task/checkpoint details." },
+      title: "🔍 Month 3",
+      description: "**Tracking not wired yet.**\n\nThis section will start filling in as we build Month 3.",
+      footer: { text: "The roadmap view stays high-level; task instructions live in /roadmap." },
     };
   } else {
     embed = {
-      title: "🗺️ Your Full 90-Day Roadmap",
-      description: "See what you've finished, what you're working on now, and everything still ahead.",
+      title: "🗺️ Your 90-Day Roadmap",
+      description: `**${knownDone}/${knownTotal} tracked tasks complete · ${overallPercent}%**\n\nA high-level view of what you've finished and what is still ahead.`,
       fields: [
         {
-          name: `⚙️ Starter Setup — ${activationModel.completed}/${activationModel.total}`,
-          value: activationModel.completed === activationModel.total
-            ? "✅ Complete"
-            : `Next: **${activationModel.next?.label || "Complete setup"}**`,
+          name: `7️⃣ Days 1–7 · ${Math.round((fundamentalsDone / 7) * 100)}%`,
+          value: progressCells(7, fundamentalsDone),
           inline: false,
         },
         {
-          name: `7️⃣ Days 1–7 — Fundamentals — ${fundamentalsDone}/7`,
-          value: fundamentalsDone >= 7 ? "✅ Fundamentals Sprint complete" : "Pick agent → Tracker → Duo → Routine → Rule of 2 → 2SS → LEAD",
+          name: `🎯 Month 1 · ${Math.round((monthOne.completed / monthOne.total) * 100)}%`,
+          value: progressCells(monthOne.total, monthOne.completed, monthOne.next?.locked ? monthOne.completed : -1),
           inline: false,
         },
         {
-          name: `🎯 Month 1 — Mechanics — ${monthOne.completed}/${monthOne.total}`,
-          value: "Aim Mastery → Crosshair Placement → Movement → 2SS → Mechanics Checkpoint",
-          inline: false,
+          name: "🧠 Month 2",
+          value: "▫️ Tracking will appear here as Month 2 is built.",
+          inline: true,
         },
         {
-          name: "🧠 Month 2 — Agent Hyperfocus",
-          value: "Pro Agent Study → Study/Apply loop → Build Playbook → Day 60 Submission",
-          inline: false,
-        },
-        {
-          name: "🔍 Month 3 — Review & Improve",
-          value: "VOD Review → Improvement Mindset → Get Feedback → Day 90 Submission",
-          inline: false,
+          name: "🔍 Month 3",
+          value: "▫️ Tracking will appear here as Month 3 is built.",
+          inline: true,
         },
       ],
-      footer: { text: "Use the buttons above to move through each section." },
+      footer: { text: "Use the tabs above to move through the 90 days." },
     };
   }
 
   return { content: "", embeds: [embed], components };
+}
+
+function progressCells(total, completed, lockedIndex = -1) {
+  const cells = [];
+  for (let index = 0; index < total; index += 1) {
+    if (index < completed) cells.push("✅");
+    else if (index === lockedIndex) cells.push("🔒");
+    else cells.push("⬜");
+  }
+  return cells.join(" ");
+}
+
+function sectionRefreshRow(section) {
+  return {
+    type: 1,
+    components: [{
+      type: 2,
+      style: 2,
+      custom_id: `roadmap:v41:refresh-section:${section}`,
+      label: "Refresh",
+      emoji: { name: "🔄" },
+    }],
+  };
+}
+
+function ownerTestRow(section) {
+  return {
+    type: 1,
+    components: [
+      {
+        type: 2,
+        style: 2,
+        custom_id: `roadmap:v41:test:${section}:prev`,
+        label: "Test Back",
+        emoji: { name: "◀️" },
+      },
+      {
+        type: 2,
+        style: 3,
+        custom_id: `roadmap:v41:test:${section}:next`,
+        label: "Test Complete",
+        emoji: { name: "✅" },
+      },
+      {
+        type: 2,
+        style: 4,
+        custom_id: `roadmap:v41:test:${section}:reset`,
+        label: "Reset Test",
+        emoji: { name: "↩️" },
+      },
+    ],
+  };
 }
 
 export function formatRoadmapView(model) {
@@ -1151,4 +1285,9 @@ export const __test = Object.freeze({
   deriveRoadmapActivation,
   buildMonthOneModel,
   fundamentalsProgress,
+  currentRoadmapTask,
+  progressCells,
+  monthUnlockTimestamp,
+  sectionRefreshRow,
+  ownerTestRow,
 });

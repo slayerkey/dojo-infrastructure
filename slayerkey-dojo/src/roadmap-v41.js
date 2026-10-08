@@ -301,7 +301,9 @@ export async function handleRoadmapV41Interaction(request, env) {
       const selected = [...new Set([...(current.manual?.completed || []), value])];
       const saved = await stub.setRoadmapV41Manual(userId, selected, String(interaction.id || ""), true);
       if (!saved?.ok) return ephemeralMessage(saved?.message || "I couldn't update that task.");
-      const view = await buildRoadmapSectionView(userId, env, stub, "month1", isOwner(userId, env));
+      const view = await buildRoadmapView(userId, env, stub, false, true, {
+        viewerUserId: userId,
+      });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't update that roadmap task: ${safeError(error)}`);
@@ -866,7 +868,7 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
   } else if (ownerTesting) {
     fields.push({
       name: "🧪 Owner Test Mode",
-      value: `Simulated task **${Math.min(12, testStage) + 1}/12**. Test controls do not change real member progress.`,
+      value: `Simulated position: **${Math.min(12, testStage)}/12 tasks complete**. Test controls do not change real member progress.`,
       inline: false,
     });
   }
@@ -965,7 +967,9 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     content: "",
     embeds: [{
       title: options?.readOnly ? `🧭 <@${userId}>'s Dojo Roadmap` : "🧭 Your Dojo Roadmap",
-      description: `**Tracked Progress:** ${knownDone}/${knownTotal} tasks · **${knownPercent}%**`,
+      description: ownerTesting
+        ? `**Test Progress:** ${Math.min(12, testStage)}/12 simulated tasks complete · **${Math.round((Math.min(12, testStage) / 12) * 100)}%**`
+        : `**Tracked Progress:** ${knownDone}/${knownTotal} tasks · **${knownPercent}%**`,
       fields,
       footer: {
         text: "Use the current task here. View Full 90 Days is the high-level progress view.",

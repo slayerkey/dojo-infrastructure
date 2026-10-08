@@ -20,6 +20,7 @@ import {
   handleRoadmapV41Interaction,
   setRoadmapV41Config,
   setRoadmapV41Manual,
+  updateRoadmapV41Test,
 } from "./roadmap-v41.js";
 
 export default {
@@ -156,6 +157,10 @@ export class DiscordGateway extends DiscordGatewayV40 {
 
   async setRoadmapV41Manual(discordUserId, selected, interactionId, allowRoleFallback = false) {
     return setRoadmapV41Manual(this, discordUserId, selected, interactionId, allowRoleFallback);
+  }
+
+  async updateRoadmapV41Test(discordUserId, section, action) {
+    return updateRoadmapV41Test(this, discordUserId, section, action);
   }
 
   async setRoadmapV41Config(config) {

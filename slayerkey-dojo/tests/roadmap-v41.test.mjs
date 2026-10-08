@@ -8,7 +8,6 @@ import {
   ROADMAP_COMMANDS,
   __test as roadmap,
   getRoadmapV41State,
-  updateRoadmapV41Test,
 } from "../src/roadmap-v41.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
@@ -92,7 +91,13 @@ test("v41 routes roadmap slash commands before the legacy interaction chain", as
   assert.equal(await response.text(), "Invalid request signature");
 });
 
-test("roadmap preview and visibility commands are registered", () => {
+test("roadmap member view, preview, and visibility commands are registered", () => {
+  const roadmapCommand = ROADMAP_COMMANDS.find((command) => command.name === "roadmap");
+  assert.ok(roadmapCommand);
+  assert.equal(roadmapCommand.options[0].name, "member");
+  assert.equal(roadmapCommand.options[0].type, 6);
+  assert.equal(roadmapCommand.options[0].required, false);
+
   assert.equal(ROADMAP_COMMANDS.some((command) => command.name === "roadmap-preview"), true);
   const visibility = ROADMAP_COMMANDS.find((command) => command.name === "roadmap-visibility");
   assert.ok(visibility);
@@ -429,57 +434,83 @@ test("Fundamentals progress treats later month tags as completed Days 1-7", () =
 });
 
 
-test("section refresh controls use a unique custom id instead of duplicating the active tab id", () => {
-  const fundamentals = roadmap.sectionRefreshRow("fundamentals");
-  const monthOne = roadmap.sectionRefreshRow("month1");
-  assert.equal(fundamentals.components[0].custom_id, "roadmap:v41:refresh-section:fundamentals");
-  assert.equal(monthOne.components[0].custom_id, "roadmap:v41:refresh-section:month1");
-  assert.notEqual(fundamentals.components[0].custom_id, "roadmap:v41:section:fundamentals");
-  assert.notEqual(monthOne.components[0].custom_id, "roadmap:v41:section:month1");
+test("section refresh controls use unique ids and preserve owner member view", () => {
+  const own = roadmap.sectionRefreshRow("month1");
+  const member = roadmap.sectionRefreshRow("month1", "123");
+  assert.equal(own.components[0].custom_id, "roadmap:v41:refresh-section:month1");
+  assert.equal(member.components[0].custom_id, "roadmap:v41:refresh-section-member:month1:123");
+  assert.notEqual(own.components[0].custom_id, "roadmap:v41:section:month1");
+});
+
+test("full roadmap navigation stays high-level with short numeric month tabs", () => {
+  const own = roadmap.roadmapSectionNavigation("overview");
+  assert.deepEqual(own.components.map((button) => button.label), ["Overview", "1–7", "1", "2", "3"]);
+
+  const member = roadmap.roadmapSectionNavigation("month1", "123");
+  assert.equal(member.components[2].custom_id, "roadmap:v41:section-member:month1:123");
 });
 
 test("calendar progress cells stay high-level", () => {
-  assert.equal(roadmap.progressCells(5, 2), "✅ ✅ ⬜ ⬜ ⬜");
+  assert.equal(roadmap.progressCells(7, 3), "✅ ✅ ✅ ⬜ ⬜ ⬜ ⬜");
   assert.equal(roadmap.progressCells(5, 4, 4), "✅ ✅ ✅ ✅ 🔒");
 });
 
-test("owner test mode can step forward and backward without touching member progress", async () => {
-  const store = storage();
-  const gateway = { ctx: { storage: store.api } };
-
-  let result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "next");
-  assert.equal(result.ok, true);
-  assert.equal(result.state.fundamentals_stage, 1);
-
-  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "next");
-  assert.equal(result.state.fundamentals_stage, 2);
-
-  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "prev");
-  assert.equal(result.state.fundamentals_stage, 1);
-
-  result = await updateRoadmapV41Test(gateway, "owner", "fundamentals", "reset");
-  assert.equal(result.state.fundamentals_stage, 0);
-  assert.equal(store.values.has("roadmap:v41:manual:owner"), false);
-});
-
-test("owner test state drives Fundamentals and Month One previews", () => {
-  assert.equal(roadmap.fundamentalsProgress({
-    test_mode: true,
-    test_state: { fundamentals_stage: 5 },
-    task_stage: { stage: 1 },
-  }), 5);
-
+test("owner test sequence starts with the original onboarding task flow", () => {
+  const activation = roadmap.buildRoadmapModel({
+    activation: {},
+    config: {
+      channels: {
+        introductions: "1",
+        tasks: "2",
+        bots: "3",
+        general: "4",
+        goals: "5",
+        wins: "6",
+      },
+    },
+  });
   const monthOne = roadmap.buildMonthOneModel({
     test_mode: true,
-    test_state: { month1_stage: 3 },
     manual: { completed: [] },
     tenure: null,
     task_stage: null,
+    config: { channels: { tasks: "2" } },
   }, new Date("2026-10-08T00:00:00.000Z"));
 
-  assert.equal(monthOne.completed, 3);
-  assert.equal(monthOne.next.key, "month1_2ss");
-  assert.equal(monthOne.checkpoint_eligible, true);
+  const first = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 0);
+  assert.equal(first.label, "Introduce yourself");
+  assert.equal(first.channel_id, "1");
+  assert.match(first.note, /introduction/i);
+
+  const seventh = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 6);
+  assert.equal(seventh.label, "Post your first win");
+  assert.equal(seventh.channel_id, "6");
+
+  const eighth = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 7);
+  assert.equal(eighth.label, "Aim Mastery Course");
+  assert.equal(eighth.links[0].url.includes("lesn_9v72k1ZZcu53H"), true);
+});
+
+test("Month One wording is concrete and avoids invented crosshair terminology", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: { completed: [] },
+    tenure: { first_eligible_at: "2026-10-01T00:00:00.000Z", is_annual: false },
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  const crosshair = model.tasks.find((task) => task.key === "month1_crosshair");
+  assert.match(crosshair.instructions, /2 Sheriff DMs\/day for 5 days/);
+  assert.match(crosshair.instructions, /crosshair placement/i);
+  assert.doesNotMatch(crosshair.instructions, /replacement/i);
+
+  const movement = model.tasks.find((task) => task.key === "month1_movement");
+  assert.match(movement.instructions, /pathing/i);
+  assert.match(movement.instructions, /isolating 1v1s/i);
+  assert.match(movement.instructions, /common angles/i);
+
+  const twoSs = model.tasks.find((task) => task.key === "month1_2ss");
+  assert.match(twoSs.instructions, /3 Vandal DMs\/day/);
+  assert.match(twoSs.instructions, /5 days/);
 });
 
 test("early Month 2 - DM Review does not become valid later unless it was submitted after unlock", () => {
@@ -519,20 +550,9 @@ test("early Month 2 - DM Review does not become valid later unless it was submit
   assert.equal(valid.completed, 5);
 });
 
-test("owner test current task moves from Fundamentals into Month One", () => {
-  const activation = roadmap.buildRoadmapModel({
-    activation: {},
-    config: { channels: {} },
-  });
-
-  const state = {
-    test_mode: true,
-    test_state: { fundamentals_stage: 7, month1_stage: 0 },
-    config: { channels: {} },
-  };
-  const monthOne = roadmap.buildMonthOneModel(state, new Date("2026-10-08T00:00:00.000Z"));
-  const current = roadmap.currentRoadmapTask(state, activation, 7, monthOne);
-
-  assert.equal(current.label, "Aim Mastery Course");
-  assert.equal(current.test_section, "month1");
+test("activation task copy gives each original onboarding step a concrete action", () => {
+  assert.match(roadmap.activationTaskInstruction("Introduce yourself"), /Post your introduction/i);
+  assert.match(roadmap.activationTaskInstruction("Reply to two other members"), /two introductions/i);
+  assert.match(roadmap.activationTaskInstruction("Link your Riot account"), /Link your Riot account/i);
+  assert.match(roadmap.activationTaskInstruction("Post your goal"), /goal/i);
 });

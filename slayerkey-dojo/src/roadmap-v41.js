@@ -1271,4 +1271,6 @@ export const __test = Object.freeze({
   currentRoadmapTask,
   progressCells,
   monthUnlockTimestamp,
+  sectionRefreshRow,
+  ownerTestRow,
 });

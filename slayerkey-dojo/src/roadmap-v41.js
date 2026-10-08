@@ -4,6 +4,7 @@ import {
   deriveMember,
   mergeTenureIntoRecord,
 } from "./activation-core.js";
+import { fullMonthsSince } from "./membership-core.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -16,6 +17,11 @@ const encoder = new TextEncoder();
 
 export const ONBOARDING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_EbCc3zaRKmonI/lessons/lesn_7emHFEKsx8iY4/";
 export const FUNDAMENTALS_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_EbCc3zaRKmonI/lessons/lesn_rHCBrfAAys9m8/";
+export const AIM_MASTERY_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_9v72k1ZZcu53H/";
+export const CROSSHAIR_TRAINING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_mF8EhC1K9jHS4/";
+export const MOVEMENT_TRAINING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_CUdopLXNdMxBf/";
+export const AIM_TRAINING_2SS_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_mGObsRlmMuODz/";
+export const TWO_SS_BREAKDOWN_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_pEV2SrUsG0tgz/";
 
 export const MANUAL_ITEMS = Object.freeze([
   { value: "onboarding_watched", label: "Watched onboarding video" },
@@ -24,6 +30,17 @@ export const MANUAL_ITEMS = Object.freeze([
   { value: "event_interest", label: "Marked Interested on an event" },
   { value: "days2_7_sprint", label: "Completed Days 2–7 Fundamentals" },
   { value: "days2_7_tasks", label: "Submitted Days 2–7 tasks" },
+  { value: "month1_aim_mastery", label: "Completed Aim Mastery Course" },
+  { value: "month1_crosshair", label: "Completed Crosshair Placement training" },
+  { value: "month1_movement", label: "Completed Movement training" },
+  { value: "month1_2ss", label: "Completed 2SS training" },
+]);
+
+const MONTH_ONE_MANUAL_VALUES = new Set([
+  "month1_aim_mastery",
+  "month1_crosshair",
+  "month1_movement",
+  "month1_2ss",
 ]);
 
 const MANUAL_VALUES = new Set(MANUAL_ITEMS.map((item) => item.value));
@@ -125,6 +142,46 @@ export async function handleRoadmapV41Interaction(request, env) {
         ? "Roadmap progress is now **public** when members use /roadmap or View My Progress. Use /roadmap-visibility private later to switch it back."
         : "Roadmap progress is now **private/ephemeral** again.",
     );
+  }
+
+  if (customId === "roadmap:v41:full" || customId.startsWith("roadmap:v41:section:")) {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the roadmap.");
+    const section = customId === "roadmap:v41:full"
+      ? "overview"
+      : String(customId.slice("roadmap:v41:section:".length) || "overview");
+    try {
+      const view = await buildRoadmapSectionView(userId, env, stub, section, isOwner(userId, env));
+      const config = await stub.getRoadmapV41Config().catch(() => null);
+      const isPublic = String(config?.progress_visibility || "public") !== "private";
+      const updateExisting = customId.startsWith("roadmap:v41:section:");
+      return Response.json({
+        type: updateExisting ? 7 : 4,
+        data: {
+          ...view,
+          ...(!updateExisting && !isPublic ? { flags: EPHEMERAL } : {}),
+          allowed_mentions: { parse: [] },
+        },
+      });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't load that roadmap section: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:complete:")) {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to update the roadmap.");
+    const value = String(customId.slice("roadmap:v41:complete:".length));
+    if (!MONTH_ONE_MANUAL_VALUES.has(value)) return ephemeralMessage("That roadmap task cannot be completed manually.");
+    try {
+      const current = await stub.getRoadmapV41State(userId, isOwner(userId, env), true);
+      if (!current?.ok) return ephemeralMessage(current?.message || "Roadmap state unavailable.");
+      const selected = [...new Set([...(current.manual?.completed || []), value])];
+      const saved = await stub.setRoadmapV41Manual(userId, selected, String(interaction.id || ""), true);
+      if (!saved?.ok) return ephemeralMessage(saved?.message || "I couldn't update that task.");
+      const view = await buildRoadmapSectionView(userId, env, stub, "month1", isOwner(userId, env));
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't update that roadmap task: ${safeError(error)}`);
+    }
   }
 
   if (command === "roadmap" || customId === "roadmap:v41:view") {
@@ -259,6 +316,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
         manual: { completed: [], updated_at: null },
         team_application: null,
         task_stage: taskStage || null,
+        tenure: tenure || null,
         config: config || null,
       };
     }
@@ -299,6 +357,7 @@ export async function getRoadmapV41State(gateway, discordUserId, allowPreview = 
       ? { status: String(teamApplication.status || "pending"), submitted_at: teamApplication.submitted_at || null }
       : null,
     task_stage: taskStage || null,
+    tenure: tenure || null,
     config: config || null,
   };
 }
@@ -569,6 +628,13 @@ export function buildRoadmapCard(config = {}) {
       },
       {
         type: 2,
+        style: 2,
+        custom_id: "roadmap:v41:full",
+        label: "Full 90 Days",
+        emoji: { name: "🗺️" },
+      },
+      {
+        type: 2,
         style: 5,
         url: ONBOARDING_URL,
         label: "Onboarding Video",
@@ -583,19 +649,6 @@ export function buildRoadmapCard(config = {}) {
       },
     ],
   }];
-
-  if (config?.channels?.start_here && config?.guild_id) {
-    components.push({
-      type: 1,
-      components: [{
-        type: 2,
-        style: 5,
-        url: discordChannelUrl(config.guild_id, config.channels.start_here),
-        label: "Full 90-Day Roadmap",
-        emoji: { name: "🗺️" },
-      }],
-    });
-  }
 
   return {
     content: "",
@@ -718,6 +771,16 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     });
   }
   components.push({ type: 1, components: resources });
+  components.push({
+    type: 1,
+    components: [{
+      type: 2,
+      style: 1,
+      custom_id: "roadmap:v41:full",
+      label: "View Full 90 Days",
+      emoji: { name: "🗺️" },
+    }],
+  });
 
   return {
     content: "",
@@ -731,6 +794,249 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     }],
     components,
   };
+}
+
+export function buildMonthOneModel(state, now = new Date()) {
+  const completedManual = new Set(state?.manual?.completed || []);
+  const tenure = state?.tenure || null;
+  const isAnnual = Boolean(tenure?.is_annual);
+  const monthlyEligible = Boolean(tenure?.first_eligible_at) && fullMonthsSince(tenure.first_eligible_at, now) >= 1;
+  const checkpointEligible = Boolean(state?.test_mode || isAnnual || monthlyEligible);
+  const stage = Number(state?.task_stage?.stage || 0);
+  const stageLabel = String(state?.task_stage?.label || "");
+  const exactMonthTwoReview = stage === 9 && /month\s*2/i.test(stageLabel) && /dm\s*review/i.test(stageLabel);
+  const checkpointSubmitted = stage > 9 || exactMonthTwoReview;
+  const checkpointComplete = checkpointEligible && checkpointSubmitted;
+
+  const tasks = [
+    {
+      key: "month1_aim_mastery",
+      label: "Aim Mastery Course",
+      done: completedManual.has("month1_aim_mastery"),
+      instructions: "Complete the Aim Mastery Course before starting the focused mechanics blocks.",
+      links: [{ label: "Aim Mastery Course", url: AIM_MASTERY_URL }],
+    },
+    {
+      key: "month1_crosshair",
+      label: "Crosshair Placement",
+      done: completedManual.has("month1_crosshair"),
+      instructions: "Watch the exercise, then do 2 Sheriff DMs/day for 5 days focused on crosshair placement and replacement.",
+      links: [{ label: "Crosshair Exercise", url: CROSSHAIR_TRAINING_URL }],
+    },
+    {
+      key: "month1_movement",
+      label: "Movement",
+      done: completedManual.has("month1_movement"),
+      instructions: "Watch the drills, then do 15 minutes in customs for 3 days: pathing, isolating 1v1s, and preparing for common angles.",
+      links: [{ label: "Movement Drills", url: MOVEMENT_TRAINING_URL }],
+    },
+    {
+      key: "month1_2ss",
+      label: "2SS",
+      done: completedManual.has("month1_2ss"),
+      instructions: "For 5 days: do the Range/Aim Lab aim-training drills, then 3 Vandal DMs/day practicing 2SS.",
+      links: [
+        { label: "2SS Breakdown", url: TWO_SS_BREAKDOWN_URL },
+        { label: "Aim + 2SS Drills", url: AIM_TRAINING_2SS_URL },
+      ],
+    },
+    {
+      key: "month1_checkpoint",
+      label: "Mechanics Checkpoint",
+      done: checkpointComplete,
+      locked: !checkpointEligible,
+      instructions: checkpointEligible
+        ? "Submit one task in the training forum using the **Month 2 - DM Review** flair. Submission is enough to complete the checkpoint."
+        : "Unlocks after one full month in the Dojo. Annual members unlock this immediately.",
+      links: [],
+    },
+  ];
+
+  return {
+    tasks,
+    completed: tasks.filter((item) => item.done).length,
+    total: tasks.length,
+    next: tasks.find((item) => !item.done) || null,
+    checkpoint_eligible: checkpointEligible,
+    checkpoint_submitted: checkpointSubmitted,
+    is_annual: isAnnual,
+    monthly_eligible: monthlyEligible,
+  };
+}
+
+function fundamentalsProgress(state) {
+  const stage = Number(state?.task_stage?.stage || 0);
+  if (stage >= 8) return 7;
+  return Math.max(0, Math.min(7, stage));
+}
+
+function roadmapSectionNavigation(active = "overview") {
+  const items = [
+    ["overview", "Overview", "🗺️"],
+    ["fundamentals", "Days 1–7", "7️⃣"],
+    ["month1", "Month 1", "🎯"],
+    ["month2", "Month 2", "🧠"],
+    ["month3", "Month 3", "🔍"],
+  ];
+  return {
+    type: 1,
+    components: items.map(([key, label, emoji]) => ({
+      type: 2,
+      style: key === active ? 1 : 2,
+      custom_id: `roadmap:v41:section:${key}`,
+      label,
+      emoji: { name: emoji },
+      disabled: key === active,
+    })),
+  };
+}
+
+async function buildRoadmapSectionView(userId, env, stub, section = "overview", allowPreview = false) {
+  const state = await stub.getRoadmapV41State(userId, allowPreview, true);
+  if (!state?.ok) throw new Error(state?.message || "Roadmap state unavailable.");
+
+  const activationModel = buildRoadmapModel(state);
+  const monthOne = buildMonthOneModel(state);
+  const fundamentalsDone = fundamentalsProgress(state);
+  const components = [roadmapSectionNavigation(section)];
+  let embed;
+
+  if (section === "fundamentals") {
+    const labels = [
+      "Pick one agent",
+      "Review your Tracker",
+      "Find a duo",
+      "Build your routine",
+      "Apply the Rule of 2",
+      "Learn 2SS Fighting",
+      "Use the LEAD Method",
+    ];
+    embed = {
+      title: "7️⃣ Days 1–7 — Fundamentals Sprint",
+      description: `**Progress: ${fundamentalsDone}/7**\n\n${labels.map((label, index) => `${fundamentalsDone >= index + 1 ? "✅" : "⬜"} **Day ${index + 1}:** ${label}`).join("\n")}`,
+      footer: { text: "Your highest tagged Fundamentals task updates this automatically." },
+    };
+    components.push({
+      type: 1,
+      components: [
+        { type: 2, style: 5, url: FUNDAMENTALS_URL, label: "Open Fundamentals", emoji: { name: "🧪" } },
+        { type: 2, style: 2, custom_id: "roadmap:v41:section:fundamentals", label: "Refresh", emoji: { name: "🔄" } },
+      ],
+    });
+  } else if (section === "month1") {
+    const taskLines = monthOne.tasks.map((item, index) => {
+      const status = item.done ? "✅" : item.locked ? "🔒" : "⬜";
+      return `${status} **${index + 1}. ${item.label}**\n${item.instructions}`;
+    });
+    embed = {
+      title: "🎯 Month 1 — Mechanics",
+      description: `**Progress: ${monthOne.completed}/${monthOne.total}**\n\n${taskLines.join("\n\n")}`,
+      footer: { text: "Training blocks are trust-based. Finish the block, then mark it complete." },
+    };
+
+    const next = monthOne.next;
+    if (next) {
+      const actions = [];
+      for (const link of next.links || []) {
+        actions.push({ type: 2, style: 5, url: link.url, label: link.label });
+      }
+      if (MONTH_ONE_MANUAL_VALUES.has(next.key)) {
+        actions.push({
+          type: 2,
+          style: 3,
+          custom_id: `roadmap:v41:complete:${next.key}`,
+          label: "Mark Complete",
+          emoji: { name: "✅" },
+        });
+      } else if (next.key === "month1_checkpoint" && !next.locked && state?.config?.channels?.tasks) {
+        actions.push({
+          type: 2,
+          style: 5,
+          url: discordChannelUrl(env.DISCORD_GUILD_ID, state.config.channels.tasks),
+          label: "Submit Checkpoint",
+          emoji: { name: "🏁" },
+        });
+      }
+      actions.push({
+        type: 2,
+        style: 2,
+        custom_id: "roadmap:v41:section:month1",
+        label: "Refresh",
+        emoji: { name: "🔄" },
+      });
+      components.push({ type: 1, components: actions.slice(0, 5) });
+    }
+  } else if (section === "month2") {
+    embed = {
+      title: "🧠 Month 2 — Agent Hyperfocus",
+      description: [
+        "**Days 30–40 — Pro Agent Study**",
+        "• Pick **1 agent + 1 map** to start.",
+        "• Alternate one day of study with one day of practice/application.",
+        "• After reviewing a map twice, decide whether to continue or move to the next map.",
+        "",
+        "**Days 40–50 — Keep Hyperfocusing**",
+        "• Continue the same study → practice → apply loop across the maps you need.",
+        "",
+        "**Days 50–60 — Build & Improve Your Playbook**",
+        "• Turn what you learned into repeatable plans and improve them through real games.",
+        "• **Day 60:** Submit your playbook.",
+      ].join("\n"),
+      footer: { text: "Month 2 tracking will be connected after we lock the exact task/checkpoint details." },
+    };
+  } else if (section === "month3") {
+    embed = {
+      title: "🔍 Month 3 — Review & Improve",
+      description: [
+        "**Days 60–90 — Learn to improve yourself**",
+        "• Learn how to VOD review.",
+        "• Build an improvement mindset.",
+        "• Learn where to get your VOD reviewed and when outside coaching helps.",
+        "• Review → identify the problem → work on it → review again.",
+        "",
+        "**Day 90 Checkpoint**",
+        "Submit your VOD review notes/session and who you reviewed with.",
+      ].join("\n"),
+      footer: { text: "Month 3 tracking will be connected after we lock the exact task/checkpoint details." },
+    };
+  } else {
+    embed = {
+      title: "🗺️ Your Full 90-Day Roadmap",
+      description: "See what you've finished, what you're working on now, and everything still ahead.",
+      fields: [
+        {
+          name: `⚙️ Starter Setup — ${activationModel.completed}/${activationModel.total}`,
+          value: activationModel.completed === activationModel.total
+            ? "✅ Complete"
+            : `Next: **${activationModel.next?.label || "Complete setup"}**`,
+          inline: false,
+        },
+        {
+          name: `7️⃣ Days 1–7 — Fundamentals — ${fundamentalsDone}/7`,
+          value: fundamentalsDone >= 7 ? "✅ Fundamentals Sprint complete" : "Pick agent → Tracker → Duo → Routine → Rule of 2 → 2SS → LEAD",
+          inline: false,
+        },
+        {
+          name: `🎯 Month 1 — Mechanics — ${monthOne.completed}/${monthOne.total}`,
+          value: "Aim Mastery → Crosshair Placement → Movement → 2SS → Mechanics Checkpoint",
+          inline: false,
+        },
+        {
+          name: "🧠 Month 2 — Agent Hyperfocus",
+          value: "Pro Agent Study → Study/Apply loop → Build Playbook → Day 60 Submission",
+          inline: false,
+        },
+        {
+          name: "🔍 Month 3 — Review & Improve",
+          value: "VOD Review → Improvement Mindset → Get Feedback → Day 90 Submission",
+          inline: false,
+        },
+      ],
+      footer: { text: "Use the buttons above to move through each section." },
+    };
+  }
+
+  return { content: "", embeds: [embed], components };
 }
 
 export function formatRoadmapView(model) {
@@ -843,4 +1149,6 @@ export const __test = Object.freeze({
   resolveRoadmapChannels,
   roadmapChannelMatchScore,
   deriveRoadmapActivation,
+  buildMonthOneModel,
+  fundamentalsProgress,
 });

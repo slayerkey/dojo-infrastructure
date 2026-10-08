@@ -167,7 +167,7 @@ test("first win remains visibly emphasized without hour/day/week sections", () =
   assert.match(text, /NEXT STEP/);
 });
 
-test("persistent card has one primary progress button and keeps resource links", () => {
+test("persistent card keeps progress, full-roadmap, and resource buttons", () => {
   const card = roadmap.buildRoadmapCard({
     guild_id: "guild",
     channels: { start_here: "123" },
@@ -177,9 +177,10 @@ test("persistent card has one primary progress button and keeps resource links",
   assert.match(card.embeds[0].description, /next step/i);
   assert.equal(card.components[0].components[0].custom_id, "roadmap:v41:view");
   assert.equal(card.components[0].components[0].label, "View My Progress");
-  assert.equal(card.components[0].components[1].url, ONBOARDING_URL);
-  assert.equal(card.components[0].components[2].url, FUNDAMENTALS_URL);
-  assert.equal(card.components[1].components[0].style, 5);
+  assert.equal(card.components[0].components[1].custom_id, "roadmap:v41:full");
+  assert.equal(card.components[0].components[1].label, "Full 90 Days");
+  assert.equal(card.components[0].components[2].url, ONBOARDING_URL);
+  assert.equal(card.components[0].components[3].url, FUNDAMENTALS_URL);
 });
 
 test("targeted member state reads existing activation and team application without scanning history", async () => {
@@ -314,4 +315,114 @@ test("roadmap model carries the member's highest tagged Fundamentals task stage"
   });
   assert.equal(model.task_stage.stage, 7);
   assert.equal(model.task_stage.label, "#7 - Pre Round LEAD");
+});
+
+
+test("Month One uses the four trust-based mechanics blocks in order", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: { completed: [] },
+    tenure: { first_eligible_at: "2026-10-01T00:00:00.000Z", is_annual: false },
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  assert.equal(model.completed, 0);
+  assert.equal(model.total, 5);
+  assert.equal(model.next.key, "month1_aim_mastery");
+  assert.deepEqual(model.tasks.map((task) => task.label), [
+    "Aim Mastery Course",
+    "Crosshair Placement",
+    "Movement",
+    "2SS",
+    "Mechanics Checkpoint",
+  ]);
+  assert.equal(model.tasks[4].locked, true);
+});
+
+test("Month One trust tasks advance only when members mark them complete", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: {
+      completed: [
+        "month1_aim_mastery",
+        "month1_crosshair",
+        "month1_movement",
+      ],
+    },
+    tenure: { first_eligible_at: "2026-10-01T00:00:00.000Z", is_annual: false },
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  assert.equal(model.completed, 3);
+  assert.equal(model.next.key, "month1_2ss");
+});
+
+test("Mechanics Checkpoint unlocks after one month or immediately for Annual", () => {
+  const completed = [
+    "month1_aim_mastery",
+    "month1_crosshair",
+    "month1_movement",
+    "month1_2ss",
+  ];
+
+  const monthly = roadmap.buildMonthOneModel({
+    manual: { completed },
+    tenure: { first_eligible_at: "2026-09-01T00:00:00.000Z", is_annual: false },
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+  assert.equal(monthly.checkpoint_eligible, true);
+  assert.equal(monthly.next.key, "month1_checkpoint");
+  assert.equal(monthly.next.locked, false);
+
+  const annual = roadmap.buildMonthOneModel({
+    manual: { completed },
+    tenure: { first_eligible_at: "2026-10-07T00:00:00.000Z", is_annual: true },
+    task_stage: null,
+  }, new Date("2026-10-08T00:00:00.000Z"));
+  assert.equal(annual.checkpoint_eligible, true);
+  assert.equal(annual.next.locked, false);
+});
+
+test("Month 2 - DM Review submission completes Mechanics Checkpoint once eligible", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: {
+      completed: [
+        "month1_aim_mastery",
+        "month1_crosshair",
+        "month1_movement",
+        "month1_2ss",
+      ],
+    },
+    tenure: { first_eligible_at: "2026-09-01T00:00:00.000Z", is_annual: false },
+    task_stage: { stage: 9, label: "Month 2 - DM Review" },
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  assert.equal(model.checkpoint_submitted, true);
+  assert.equal(model.completed, 5);
+  assert.equal(model.next, null);
+});
+
+test("Month 2 checkpoint flair does not complete the checkpoint before eligibility", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: {
+      completed: [
+        "month1_aim_mastery",
+        "month1_crosshair",
+        "month1_movement",
+        "month1_2ss",
+      ],
+    },
+    tenure: { first_eligible_at: "2026-10-01T00:00:00.000Z", is_annual: false },
+    task_stage: { stage: 9, label: "Month 2 - DM Review" },
+  }, new Date("2026-10-08T00:00:00.000Z"));
+
+  assert.equal(model.checkpoint_submitted, true);
+  assert.equal(model.checkpoint_eligible, false);
+  assert.equal(model.completed, 4);
+  assert.equal(model.next.key, "month1_checkpoint");
+  assert.equal(model.next.locked, true);
+});
+
+test("Fundamentals progress treats later month tags as completed Days 1-7", () => {
+  assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 4 } }), 4);
+  assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 8 } }), 7);
+  assert.equal(roadmap.fundamentalsProgress({ task_stage: { stage: 9 } }), 7);
 });

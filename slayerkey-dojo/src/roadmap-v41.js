@@ -145,6 +145,23 @@ export async function handleRoadmapV41Interaction(request, env) {
     );
   }
 
+  if (customId.startsWith("roadmap:v41:test-current:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const [, , , section, action] = customId.split(":");
+    if (!["fundamentals", "month1"].includes(section) || !["prev", "next", "reset"].includes(action)) {
+      return ephemeralMessage("Unknown roadmap test control.");
+    }
+    try {
+      const current = await stub.getRoadmapV41State(userId, true, true);
+      if (!current?.test_mode) return ephemeralMessage("Owner Test Mode is not active for this account.");
+      await stub.updateRoadmapV41Test(userId, section, action);
+      const view = await buildRoadmapView(userId, env, stub, true, true);
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't update Owner Test Mode: ${safeError(error)}`);
+    }
+  }
+
   if (customId.startsWith("roadmap:v41:test:")) {
     if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
     const [, , , section, action] = customId.split(":");
@@ -823,21 +840,21 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
         {
           type: 2,
           style: 2,
-          custom_id: `roadmap:v41:test:${current.test_section}:prev`,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:prev`,
           label: "Test Back",
           emoji: { name: "◀️" },
         },
         {
           type: 2,
           style: 3,
-          custom_id: `roadmap:v41:test:${current.test_section}:next`,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:next`,
           label: "Test Complete",
           emoji: { name: "✅" },
         },
         {
           type: 2,
           style: 4,
-          custom_id: `roadmap:v41:test:${current.test_section}:reset`,
+          custom_id: `roadmap:v41:test-current:${current.test_section}:reset`,
           label: "Reset Test",
           emoji: { name: "↩️" },
         },

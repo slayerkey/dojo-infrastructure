@@ -153,11 +153,12 @@ export async function handleRoadmapV41Interaction(request, env) {
       const view = await buildRoadmapSectionView(userId, env, stub, section, isOwner(userId, env));
       const config = await stub.getRoadmapV41Config().catch(() => null);
       const isPublic = String(config?.progress_visibility || "public") !== "private";
+      const updateExisting = customId.startsWith("roadmap:v41:section:");
       return Response.json({
-        type: 4,
+        type: updateExisting ? 7 : 4,
         data: {
           ...view,
-          ...(isPublic ? {} : { flags: EPHEMERAL }),
+          ...(!updateExisting && !isPublic ? { flags: EPHEMERAL } : {}),
           allowed_mentions: { parse: [] },
         },
       });

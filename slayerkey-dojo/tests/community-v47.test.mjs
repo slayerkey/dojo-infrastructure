@@ -146,3 +146,59 @@ test("unknown guild participants are not turned into Dojo activation records", a
   assert.equal(result.reason, "not_known_dojo_member");
   assert.equal(values.has("activation:v3:member:999"), false);
 });
+
+
+test("stable flair ID survives a Discord flair rename", () => {
+  const resolved = community.resolveTaskStageForTag(
+    "tag-dm",
+    "Mechanics Review",
+    { ids: { month2_dm_review: "tag-dm" } },
+  );
+  assert.deepEqual(resolved, {
+    stage: 9,
+    label: "Mechanics Review",
+    semantic_key: "month2_dm_review",
+  });
+});
+
+test("Month 3 playbook uses its stable flair ID even if renamed", () => {
+  const resolved = community.resolveTaskStageForTag(
+    "tag-playbook",
+    "Agent Playbooks",
+    { ids: { month3_playbook: "tag-playbook" } },
+  );
+  assert.equal(resolved.stage, 10);
+  assert.equal(resolved.semantic_key, "month3_playbook");
+  assert.equal(resolved.label, "Agent Playbooks");
+});
+
+test("task thread stores semantic checkpoint key from stable flair ID", async () => {
+  const now = new Date().toISOString();
+  const { values, storage } = mockStorage([
+    ["taskstage:v47:tags", {
+      updated_at: now,
+      tags: {
+        "tag-dm": "Renamed Mechanics Flair",
+      },
+    }],
+    ["taskstage:v47:stable-tags", {
+      ids: { month2_dm_review: "tag-dm", month3_playbook: "tag-playbook" },
+      checked_at: now,
+      updated_at: now,
+    }],
+  ]);
+  const gateway = { ctx: { storage }, env: {} };
+
+  const result = await observeTaskThreadV47(gateway, {
+    id: "thread-renamed",
+    parent_id: ACTIVATION_DESTINATIONS.training,
+    owner_id: "200",
+    applied_tags: ["tag-dm"],
+  });
+
+  assert.equal(result.ok, true);
+  const stored = values.get("taskstage:v47:member:200");
+  assert.equal(stored.stage, 9);
+  assert.equal(stored.semantic_key, "month2_dm_review");
+  assert.equal(stored.label, "Renamed Mechanics Flair");
+});

@@ -1043,7 +1043,10 @@ export function buildMonthOneModel(state, now = new Date()) {
 
   const stage = Number(state?.task_stage?.stage || 0);
   const stageLabel = String(state?.task_stage?.label || "");
-  const exactMonthTwoReview = stage === 9 && /month\s*2/i.test(stageLabel) && /dm\s*review/i.test(stageLabel);
+  const semanticKey = String(state?.task_stage?.semantic_key || "");
+  const exactMonthTwoReview =
+    semanticKey === "month2_dm_review" ||
+    (stage === 9 && /month\s*2/i.test(stageLabel) && /dm\s*review/i.test(stageLabel));
   const checkpointSubmitted = stage > 9 || exactMonthTwoReview;
   const submittedAt = Date.parse(state?.task_stage?.observed_at || "");
   const unlockAt = monthUnlockTimestamp(tenure?.first_eligible_at);

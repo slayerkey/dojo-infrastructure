@@ -556,3 +556,28 @@ test("activation task copy gives each original onboarding step a concrete action
   assert.match(roadmap.activationTaskInstruction("Link your Riot account"), /Link your Riot account/i);
   assert.match(roadmap.activationTaskInstruction("Post your goal"), /goal/i);
 });
+
+
+test("Mechanics checkpoint still completes after the flair is renamed when stable semantic key is present", () => {
+  const model = roadmap.buildMonthOneModel({
+    manual: {
+      completed: [
+        "month1_aim_mastery",
+        "month1_crosshair",
+        "month1_movement",
+        "month1_2ss",
+      ],
+    },
+    tenure: { first_eligible_at: "2026-09-01T00:00:00.000Z", is_annual: false },
+    task_stage: {
+      stage: 9,
+      label: "Renamed Mechanics Review",
+      semantic_key: "month2_dm_review",
+      observed_at: "2026-10-10T00:00:00.000Z",
+    },
+  }, new Date("2026-10-13T00:00:00.000Z"));
+
+  assert.equal(model.checkpoint_submitted, true);
+  assert.equal(model.completed, 5);
+  assert.equal(model.next, null);
+});

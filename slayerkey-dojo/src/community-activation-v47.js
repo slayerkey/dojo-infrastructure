@@ -14,7 +14,19 @@ const ROADMAP_CONFIG_KEY = "roadmap:v41:config";
 const COMMUNITY_THREAD_PREFIX = "community:v47:thread:";
 const TASK_STAGE_PREFIX = "taskstage:v47:member:";
 const TASK_TAG_CACHE_KEY = "taskstage:v47:tags";
+const STABLE_TASK_TAGS_KEY = "taskstage:v47:stable-tags";
 const TASK_SCAN_STATE_KEY = "taskstage:v47:last-scan";
+
+export const STABLE_TASK_TAG_DEFINITIONS = Object.freeze({
+  month2_dm_review: Object.freeze({
+    stage: 9,
+    bootstrap_names: Object.freeze(["Month 2 - DM Review"]),
+  }),
+  month3_playbook: Object.freeze({
+    stage: 10,
+    bootstrap_names: Object.freeze(["Month 3 - Playbook"]),
+  }),
+});
 
 export async function observeV47Message(gateway, message, allowRoleFallback = false) {
   const userId = String(message?.author?.id || "");
@@ -115,11 +127,12 @@ export async function observeTaskThreadV47(gateway, thread) {
   if (!ownerId) return { ok: false, reason: "missing_owner" };
 
   const tagMap = await getTaskTagMap(gateway);
+  const stableTags = await ensureStableTaskTagIdsV47(gateway, { tagMap }).catch(() => ({ ids: {} }));
   const applied = Array.isArray(thread?.applied_tags) ? thread.applied_tags.map(String) : [];
   const stages = applied
     .map((tagId) => {
       const label = tagMap[tagId] || null;
-      const parsed = parseTaskStage(label);
+      const parsed = resolveTaskStageForTag(tagId, label, stableTags);
       return parsed ? { ...parsed, tag_id: tagId } : null;
     })
     .filter(Boolean)
@@ -139,6 +152,7 @@ export async function observeTaskThreadV47(gateway, thread) {
     stage: highest.stage,
     label: highest.label,
     tag_id: highest.tag_id,
+    semantic_key: highest.semantic_key || null,
     thread_id: String(thread?.id || ""),
     observed_at: new Date().toISOString(),
   };
@@ -210,7 +224,67 @@ export async function getTaskStageMapV47(gateway) {
 }
 
 export async function getTaskStageV47(gateway, discordUserId) {
+  // Also pins roadmap checkpoint flairs to their Discord tag IDs. Once pinned,
+  // renaming the flair in Discord does not change its roadmap meaning.
+  await ensureStableTaskTagIdsV47(gateway).catch(() => null);
   return (await gateway.ctx.storage.get(`${TASK_STAGE_PREFIX}${String(discordUserId || "")}`)) || null;
+}
+
+export async function ensureStableTaskTagIdsV47(gateway, { tagMap = null, force = false } = {}) {
+  const existing = (await gateway.ctx.storage.get(STABLE_TASK_TAGS_KEY)) || {};
+  const ids = { ...(existing.ids || {}) };
+  const complete = Object.keys(STABLE_TASK_TAG_DEFINITIONS).every((key) => ids[key]);
+
+  if (complete && !force) return { ...existing, ids };
+
+  const checkedAt = Date.parse(existing.checked_at || "");
+  const recentlyChecked = Number.isFinite(checkedAt) && checkedAt > Date.now() - 6 * 60 * 60 * 1000;
+  if (!tagMap && recentlyChecked && !force) return { ...existing, ids };
+
+  const currentTagMap = tagMap || await getTaskTagMap(gateway, { force: true });
+  let changed = false;
+
+  for (const [semanticKey, definition] of Object.entries(STABLE_TASK_TAG_DEFINITIONS)) {
+    if (ids[semanticKey]) continue;
+    const accepted = new Set((definition.bootstrap_names || []).map(normalizeTagLabel));
+    const match = Object.entries(currentTagMap || {})
+      .find(([, label]) => accepted.has(normalizeTagLabel(label)));
+    if (match?.[0]) {
+      ids[semanticKey] = String(match[0]);
+      changed = true;
+    }
+  }
+
+  const next = {
+    ids,
+    checked_at: new Date().toISOString(),
+    updated_at: changed ? new Date().toISOString() : (existing.updated_at || null),
+  };
+  await gateway.ctx.storage.put(STABLE_TASK_TAGS_KEY, next);
+  return next;
+}
+
+export function resolveTaskStageForTag(tagId, label, stableTags = null) {
+  const id = String(tagId || "");
+  const stableIds = stableTags?.ids || {};
+
+  for (const [semanticKey, stableId] of Object.entries(stableIds)) {
+    if (String(stableId || "") !== id) continue;
+    const definition = STABLE_TASK_TAG_DEFINITIONS[semanticKey];
+    if (!definition) continue;
+    return {
+      stage: definition.stage,
+      label: String(label || definition.bootstrap_names?.[0] || semanticKey),
+      semantic_key: semanticKey,
+    };
+  }
+
+  const parsed = parseTaskStage(label);
+  return parsed ? { ...parsed, semantic_key: null } : null;
+}
+
+function normalizeTagLabel(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 async function getTaskTagMap(gateway, { force = false } = {}) {
@@ -285,4 +359,6 @@ function normalizeIso(value) {
 
 export const __test = Object.freeze({
   parseTaskStage,
+  resolveTaskStageForTag,
+  normalizeTagLabel,
 });

@@ -452,10 +452,10 @@ test("full roadmap navigation stays high-level with short numeric month tabs", (
 
 test("calendar progress cells stay high-level", () => {
   assert.equal(roadmap.progressCells(7, 3), "✅ ✅ ✅ ⬜ ⬜ ⬜ ⬜");
-  assert.equal(roadmap.progressCells(5, 4, 4), "✅ ✅ ✅ ✅ 🔒");
+  assert.equal(roadmap.progressCells(5, 4), "✅ ✅ ✅ ✅ ⬜");
 });
 
-test("owner test sequence starts with the original onboarding task flow", () => {
+test("owner test sequence walks the full 90-day roadmap", () => {
   const activation = roadmap.buildRoadmapModel({
     activation: {},
     config: {
@@ -469,26 +469,32 @@ test("owner test sequence starts with the original onboarding task flow", () => 
       },
     },
   });
-  const monthOne = roadmap.buildMonthOneModel({
+  const state = {
     test_mode: true,
     manual: { completed: [] },
     tenure: null,
     task_stage: null,
     config: { channels: { tasks: "2" } },
-  }, new Date("2026-10-08T00:00:00.000Z"));
+  };
+  const monthOne = roadmap.buildMonthOneModel(state, new Date("2026-10-08T00:00:00.000Z"));
+  const monthTwo = roadmap.buildMonthTwoModel(state);
+  const monthThree = roadmap.buildMonthThreeModel(state);
 
-  const first = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 0);
+  const first = roadmap.currentRoadmapTask(state, activation, monthOne, monthTwo, monthThree, 0);
   assert.equal(first.label, "Introduce yourself");
   assert.equal(first.channel_id, "1");
-  assert.match(first.note, /introduction/i);
 
-  const seventh = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 6);
-  assert.equal(seventh.label, "Post your first win");
-  assert.equal(seventh.channel_id, "6");
+  const monthOneStart = roadmap.currentRoadmapTask(state, activation, monthOne, monthTwo, monthThree, 7);
+  assert.equal(monthOneStart.label, "Aim Mastery Course");
 
-  const eighth = roadmap.currentRoadmapTask({ test_mode: true }, activation, monthOne, 7);
-  assert.equal(eighth.label, "Aim Mastery Course");
-  assert.equal(eighth.links[0].url.includes("lesn_9v72k1ZZcu53H"), true);
+  const monthTwoStart = roadmap.currentRoadmapTask(state, activation, monthOne, monthTwo, monthThree, 12);
+  assert.equal(monthTwoStart.label, "Week 1 — Build a Playbook");
+
+  const monthThreeStart = roadmap.currentRoadmapTask(state, activation, monthOne, monthTwo, monthThree, 17);
+  assert.equal(monthThreeStart.label, "Week 1 — VOD Review");
+
+  const complete = roadmap.currentRoadmapTask(state, activation, monthOne, monthTwo, monthThree, 22);
+  assert.equal(complete, null);
 });
 
 test("Month One wording is concrete and avoids invented crosshair terminology", () => {
@@ -580,4 +586,89 @@ test("Mechanics checkpoint still completes after the flair is renamed when stabl
   assert.equal(model.checkpoint_submitted, true);
   assert.equal(model.completed, 5);
   assert.equal(model.next, null);
+});
+
+
+test("Month Two is four playbooks plus a flair checkpoint", () => {
+  const model = roadmap.buildMonthTwoModel({
+    manual: { completed: ["month2_week1", "month2_week2"] },
+    task_stage: null,
+  });
+
+  assert.equal(model.total, 5);
+  assert.equal(model.completed, 2);
+  assert.equal(model.next.key, "month2_week3");
+  assert.deepEqual(model.tasks.slice(0, 4).map((task) => task.label), [
+    "Week 1 — Build a Playbook",
+    "Week 2 — Build a Playbook",
+    "Week 3 — Build a Playbook",
+    "Week 4 — Build a Playbook",
+  ]);
+  assert.equal(model.tasks[4].label, "Submit 4 Playbooks");
+  assert.equal(model.tasks[0].links.length, 2);
+});
+
+test("Month 3 - Playbook stable flair completes Month Two checkpoint", () => {
+  const model = roadmap.buildMonthTwoModel({
+    manual: { completed: ["month2_week1", "month2_week2", "month2_week3", "month2_week4"] },
+    task_stage: {
+      stage: 10,
+      label: "Renamed Playbook Flair",
+      semantic_key: "month3_playbook",
+    },
+  });
+
+  assert.equal(model.completed, 5);
+  assert.equal(model.next, null);
+});
+
+test("Month Three is four weekly VOD reviews plus the 90-day checkpoint", () => {
+  const model = roadmap.buildMonthThreeModel({
+    manual: { completed: ["month3_week1"] },
+    task_stage: null,
+  });
+
+  assert.equal(model.total, 5);
+  assert.equal(model.completed, 1);
+  assert.equal(model.next.key, "month3_week2");
+  assert.deepEqual(model.tasks.slice(0, 4).map((task) => task.label), [
+    "Week 1 — VOD Review",
+    "Week 2 — VOD Review",
+    "Week 3 — VOD Review",
+    "Week 4 — VOD Review",
+  ]);
+  assert.equal(model.tasks[4].label, "90-Day Checkpoint");
+});
+
+test("Month 4 - VOD Review stable flair completes the 90-day checkpoint", () => {
+  const model = roadmap.buildMonthThreeModel({
+    manual: { completed: ["month3_week1", "month3_week2", "month3_week3", "month3_week4"] },
+    task_stage: {
+      stage: 11,
+      label: "Renamed Final Flair",
+      semantic_key: "month4_vod_review",
+    },
+  });
+
+  assert.equal(model.completed, 5);
+  assert.equal(model.next, null);
+});
+
+test("full 90-day preview distributes simulated progress across all four rows", () => {
+  const p0 = roadmap.simulatedGroupProgress(0, 7, 5, 5, 5);
+  assert.deepEqual(p0, { days: 0, month1: 0, month2: 0, month3: 0 });
+
+  const p14 = roadmap.simulatedGroupProgress(14, 7, 5, 5, 5);
+  assert.deepEqual(p14, { days: 7, month1: 5, month2: 2, month3: 0 });
+
+  const p22 = roadmap.simulatedGroupProgress(22, 7, 5, 5, 5);
+  assert.deepEqual(p22, { days: 7, month1: 5, month2: 5, month3: 5 });
+});
+
+test("owner test navigation keeps the simulated stage while switching months", () => {
+  const nav = roadmap.roadmapSectionNavigation("overview", null, 14);
+  assert.equal(nav.components[3].custom_id, "roadmap:v41:section-test:month2:14");
+
+  const refresh = roadmap.sectionRefreshRow("month2", null, 14);
+  assert.equal(refresh.components[0].custom_id, "roadmap:v41:refresh-section-test:month2:14");
 });

@@ -22,6 +22,11 @@ export const CROSSHAIR_TRAINING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaC
 export const MOVEMENT_TRAINING_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_CUdopLXNdMxBf/";
 export const AIM_TRAINING_2SS_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_mGObsRlmMuODz/";
 export const TWO_SS_BREAKDOWN_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_S0QdgIpwwRmpJ/lessons/lesn_pEV2SrUsG0tgz/";
+export const PRO_VOD_REVIEW_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_3diHX6B3wKiAm/lessons/lesn_xlVCM1is0iibo/";
+export const PLAYBOOK_GUIDE_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_3diHX6B3wKiAm/lessons/lesn_8vHUsAVnToCXr/";
+export const VOD_REVIEW_FRAMEWORK_URL = "https://whop.com/slayerkey/exp_gJq4d54kaCqWzC/app/courses/cors_lMkDTlvfFGCJz/lessons/lesn_blE6D0ZNCijlK/";
+
+const ROADMAP_TASK_TOTAL = 22;
 
 export const MANUAL_ITEMS = Object.freeze([
   { value: "onboarding_watched", label: "Watched onboarding video" },
@@ -34,13 +39,29 @@ export const MANUAL_ITEMS = Object.freeze([
   { value: "month1_crosshair", label: "Completed Crosshair Placement training" },
   { value: "month1_movement", label: "Completed Movement training" },
   { value: "month1_2ss", label: "Completed 2SS training" },
+  { value: "month2_week1", label: "Completed Month 2 Week 1 playbook" },
+  { value: "month2_week2", label: "Completed Month 2 Week 2 playbook" },
+  { value: "month2_week3", label: "Completed Month 2 Week 3 playbook" },
+  { value: "month2_week4", label: "Completed Month 2 Week 4 playbook" },
+  { value: "month3_week1", label: "Completed Month 3 Week 1 VOD review" },
+  { value: "month3_week2", label: "Completed Month 3 Week 2 VOD review" },
+  { value: "month3_week3", label: "Completed Month 3 Week 3 VOD review" },
+  { value: "month3_week4", label: "Completed Month 3 Week 4 VOD review" },
 ]);
 
-const MONTH_ONE_MANUAL_VALUES = new Set([
+const ROADMAP_MANUAL_VALUES = new Set([
   "month1_aim_mastery",
   "month1_crosshair",
   "month1_movement",
   "month1_2ss",
+  "month2_week1",
+  "month2_week2",
+  "month2_week3",
+  "month2_week4",
+  "month3_week1",
+  "month3_week2",
+  "month3_week3",
+  "month3_week4",
 ]);
 
 const MANUAL_VALUES = new Set(MANUAL_ITEMS.map((item) => item.value));
@@ -157,10 +178,10 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (customId.startsWith("roadmap:v41:teststep:")) {
     if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
     const parts = customId.split(":");
-    const currentStage = Math.max(0, Math.min(12, Number(parts[3] || 0)));
+    const currentStage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(parts[3] || 0)));
     const action = String(parts[4] || "");
     const nextStage = action === "next"
-      ? Math.min(12, currentStage + 1)
+      ? Math.min(ROADMAP_TASK_TOTAL, currentStage + 1)
       : action === "prev"
         ? Math.max(0, currentStage - 1)
         : action === "reset"
@@ -179,7 +200,7 @@ export async function handleRoadmapV41Interaction(request, env) {
 
   if (customId.startsWith("roadmap:v41:refresh-test:")) {
     if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
-    const stage = Math.max(0, Math.min(12, Number(customId.slice("roadmap:v41:refresh-test:".length) || 0)));
+    const stage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(customId.slice("roadmap:v41:refresh-test:".length) || 0)));
     try {
       const view = await buildRoadmapView(userId, env, stub, true, true, {
         testStage: stage,
@@ -188,6 +209,54 @@ export async function handleRoadmapV41Interaction(request, env) {
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
       return ephemeralMessage(`I couldn't refresh Owner Test Mode: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:full-test:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const stage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(customId.slice("roadmap:v41:full-test:".length) || 0)));
+    try {
+      const view = await buildRoadmapSectionView(userId, env, stub, "overview", true, {
+        viewerUserId: userId,
+        testStage: stage,
+      });
+      return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't load the test roadmap: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:section-test:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const rest = customId.slice("roadmap:v41:section-test:".length);
+    const separator = rest.lastIndexOf(":");
+    const section = separator >= 0 ? rest.slice(0, separator) : "overview";
+    const stage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(separator >= 0 ? rest.slice(separator + 1) : 0)));
+    try {
+      const view = await buildRoadmapSectionView(userId, env, stub, section, true, {
+        viewerUserId: userId,
+        testStage: stage,
+      });
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't load that test roadmap section: ${safeError(error)}`);
+    }
+  }
+
+  if (customId.startsWith("roadmap:v41:refresh-section-test:")) {
+    if (!isOwner(userId, env)) return ephemeralMessage("Owner test controls are only available to the Dojo owner.");
+    const rest = customId.slice("roadmap:v41:refresh-section-test:".length);
+    const separator = rest.lastIndexOf(":");
+    const section = separator >= 0 ? rest.slice(0, separator) : "overview";
+    const stage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(separator >= 0 ? rest.slice(separator + 1) : 0)));
+    try {
+      const view = await buildRoadmapSectionView(userId, env, stub, section, true, {
+        viewerUserId: userId,
+        testStage: stage,
+      });
+      return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
+    } catch (error) {
+      return ephemeralMessage(`I couldn't refresh that test roadmap section: ${safeError(error)}`);
     }
   }
 
@@ -294,7 +363,7 @@ export async function handleRoadmapV41Interaction(request, env) {
   if (customId.startsWith("roadmap:v41:complete:")) {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to update the roadmap.");
     const value = String(customId.slice("roadmap:v41:complete:".length));
-    if (!MONTH_ONE_MANUAL_VALUES.has(value)) return ephemeralMessage("That roadmap task cannot be completed manually.");
+    if (!ROADMAP_MANUAL_VALUES.has(value)) return ephemeralMessage("That roadmap task cannot be completed manually.");
     try {
       const current = await stub.getRoadmapV41State(userId, isOwner(userId, env), true);
       if (!current?.ok) return ephemeralMessage(current?.message || "Roadmap state unavailable.");
@@ -844,53 +913,55 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
 
   const activationModel = buildRoadmapModel(state);
   const monthOne = buildMonthOneModel(state);
-  const knownDone = activationModel.completed + monthOne.completed;
-  const knownTotal = activationModel.total + monthOne.total;
+  const monthTwo = buildMonthTwoModel(state);
+  const monthThree = buildMonthThreeModel(state);
+  const knownDone = activationModel.completed + monthOne.completed + monthTwo.completed + monthThree.completed;
+  const knownTotal = activationModel.total + monthOne.total + monthTwo.total + monthThree.total;
   const knownPercent = Math.round((knownDone / knownTotal) * 100);
   const testStage = Number.isFinite(Number(options?.testStage)) ? Number(options.testStage) : null;
   const ownerTesting = Boolean(state.test_mode && testStage !== null);
-  const current = currentRoadmapTask(state, activationModel, monthOne, ownerTesting ? testStage : null);
+  const current = currentRoadmapTask(
+    state,
+    activationModel,
+    monthOne,
+    monthTwo,
+    monthThree,
+    ownerTesting ? testStage : null,
+  );
 
   const fields = [{
     name: current?.locked ? "🔒 Current Task" : "☑️ Current Task",
     value: current
       ? `**${current.label}**${current.note ? `\n${current.note}` : ""}`
-      : "**Month 1 complete.** Month 2 will appear here once we finish building it.",
+      : "**90 days complete.** Keep reviewing. Keep improving.",
     inline: false,
   }];
 
   if (options?.readOnly) {
     fields.unshift({
       name: "👀 Owner View",
-      value: `Viewing <@${userId}>'s roadmap. This view is read-only.`,
+      value: `Viewing <@${userId}>'s roadmap. Read-only.`,
       inline: false,
     });
   } else if (ownerTesting) {
     fields.push({
       name: "🧪 Owner Test Mode",
-      value: `Simulated position: **${Math.min(12, testStage)}/12 tasks complete**. Test controls do not change real member progress.`,
+      value: `Simulated position: **${Math.min(ROADMAP_TASK_TOTAL, testStage)}/${ROADMAP_TASK_TOTAL} tasks complete**.`,
       inline: false,
     });
   }
 
   const primary = [];
   if (Array.isArray(current?.links) && current.links.length) {
-    primary.push({
-      type: 2,
-      style: 5,
-      url: current.links[0].url,
-      label: "Open Resource",
-      emoji: { name: "📖" },
-    });
-    if (current.links[1]?.url) {
+    current.links.slice(0, 2).forEach((link, index) => {
       primary.push({
         type: 2,
         style: 5,
-        url: current.links[1].url,
-        label: "Open Drills",
-        emoji: { name: "🎯" },
+        url: link.url,
+        label: link.button_label || (index === 0 ? "Open Resource" : "Open Resource 2"),
+        emoji: { name: link.emoji || "📖" },
       });
-    }
+    });
   } else if (current?.channel_id) {
     primary.push({
       type: 2,
@@ -927,7 +998,11 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
   primary.push({
     type: 2,
     style: 1,
-    custom_id: options?.readOnly ? `roadmap:v41:full-member:${userId}` : "roadmap:v41:full",
+    custom_id: options?.readOnly
+      ? `roadmap:v41:full-member:${userId}`
+      : ownerTesting
+        ? `roadmap:v41:full-test:${testStage}`
+        : "roadmap:v41:full",
     label: "View Full 90 Days",
     emoji: { name: "🗺️" },
   });
@@ -968,31 +1043,33 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     embeds: [{
       title: options?.readOnly ? `🧭 <@${userId}>'s Dojo Roadmap` : "🧭 Your Dojo Roadmap",
       description: ownerTesting
-        ? `**Test Progress:** ${Math.min(12, testStage)}/12 simulated tasks complete · **${Math.round((Math.min(12, testStage) / 12) * 100)}%**`
-        : `**Tracked Progress:** ${knownDone}/${knownTotal} tasks · **${knownPercent}%**`,
+        ? `**Test Progress:** ${Math.min(ROADMAP_TASK_TOTAL, testStage)}/${ROADMAP_TASK_TOTAL} · **${Math.round((Math.min(ROADMAP_TASK_TOTAL, testStage) / ROADMAP_TASK_TOTAL) * 100)}%**`
+        : `**90-Day Progress:** ${knownDone}/${knownTotal} · **${knownPercent}%**`,
       fields,
       footer: {
-        text: "Use the current task here. View Full 90 Days is the high-level progress view.",
+        text: "One task. Do it. Complete it. Move on.",
       },
     }],
     components,
   };
 }
 
-function currentRoadmapTask(state, activationModel, monthOne, testStage = null) {
+function currentRoadmapTask(state, activationModel, monthOne, monthTwo, monthThree, testStage = null) {
   if (testStage !== null) {
-    const stage = Math.max(0, Math.min(12, Number(testStage)));
-    if (stage < activationModel.total) {
-      const item = activationModel.tasks[stage];
-      return {
+    let stage = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(testStage)));
+    const groups = [
+      { model: activationModel, view: (item) => ({
         label: item.label,
         channel_id: item.channel_id,
         note: activationTaskInstruction(item.label),
-      };
-    }
-    const monthIndex = stage - activationModel.total;
-    if (monthIndex < monthOne.tasks.length) {
-      return monthOneTaskView(monthOne.tasks[monthIndex], state);
+      }) },
+      { model: monthOne, view: (item) => roadmapTaskView(item, state) },
+      { model: monthTwo, view: (item) => roadmapTaskView(item, state) },
+      { model: monthThree, view: (item) => roadmapTaskView(item, state) },
+    ];
+    for (const group of groups) {
+      if (stage < group.model.total) return group.view(group.model.tasks[stage]);
+      stage -= group.model.total;
     }
     return null;
   }
@@ -1004,34 +1081,35 @@ function currentRoadmapTask(state, activationModel, monthOne, testStage = null) 
       note: activationTaskInstruction(activationModel.next.label),
     };
   }
-
-  if (monthOne.next) return monthOneTaskView(monthOne.next, state);
+  if (monthOne.next) return roadmapTaskView(monthOne.next, state);
+  if (monthTwo.next) return roadmapTaskView(monthTwo.next, state);
+  if (monthThree.next) return roadmapTaskView(monthThree.next, state);
   return null;
 }
 
-function monthOneTaskView(item, state) {
+function roadmapTaskView(item, state) {
   return {
     label: item.label,
     links: item.links || [],
-    channel_id: item.key === "month1_checkpoint" && !item.locked ? state?.config?.channels?.tasks || null : null,
+    channel_id: item.checkpoint && !item.locked ? state?.config?.channels?.tasks || null : null,
     note: item.instructions,
     locked: Boolean(item.locked),
-    checkpoint: item.key === "month1_checkpoint",
-    manual_key: MONTH_ONE_MANUAL_VALUES.has(item.key) ? item.key : null,
+    checkpoint: Boolean(item.checkpoint),
+    manual_key: ROADMAP_MANUAL_VALUES.has(item.key) ? item.key : null,
   };
 }
 
 function activationTaskInstruction(label) {
   const instructions = {
-    "Introduce yourself": "Post your introduction so people know who you are and what you're working on.",
-    "Reply to two other members": "Reply to two introductions and start meeting people in the Dojo.",
-    "Post your first training task": "Post your first roadmap/training task in the training forum.",
-    "Link your Riot account": "Link your Riot account so the Dojo can track your rank progress.",
-    "Join a conversation": "Say something in the community and start participating.",
-    "Post your goal": "Post the rank or improvement goal you're working toward.",
-    "Post your first win": "Share your first win so you start documenting progress.",
+    "Introduce yourself": "Post your introduction.",
+    "Reply to two other members": "Reply to two introductions.",
+    "Post your first training task": "Post your first training task.",
+    "Link your Riot account": "Link your Riot account.",
+    "Join a conversation": "Join one conversation.",
+    "Post your goal": "Post your rank goal.",
+    "Post your first win": "Post your first win.",
   };
-  return instructions[String(label || "")] || "Complete this step, then hit Refresh.";
+  return instructions[String(label || "")] || "Complete this step. Refresh.";
 }
 
 export function buildMonthOneModel(state, now = new Date()) {
@@ -1081,7 +1159,7 @@ export function buildMonthOneModel(state, now = new Date()) {
       instructions: "For 5 days: do the Range/Aim Lab aim-training drills, then 3 Vandal DMs/day practicing 2SS.",
       links: [
         { label: "2SS Breakdown", url: TWO_SS_BREAKDOWN_URL },
-        { label: "Aim + 2SS Drills", url: AIM_TRAINING_2SS_URL },
+        { label: "Aim + 2SS Drills", url: AIM_TRAINING_2SS_URL, button_label: "Open Drills", emoji: "🎯" },
       ],
     },
   ];
@@ -1094,6 +1172,7 @@ export function buildMonthOneModel(state, now = new Date()) {
   tasks.push({
     key: "month1_checkpoint",
     label: "Mechanics Checkpoint",
+    checkpoint: true,
     done: checkpointComplete,
     locked: !checkpointEligible,
     instructions: checkpointEligible
@@ -1112,6 +1191,87 @@ export function buildMonthOneModel(state, now = new Date()) {
     checkpoint_submission_eligible: submissionWasEligible,
     is_annual: isAnnual,
     monthly_eligible: monthlyEligible,
+  };
+}
+
+export function buildMonthTwoModel(state) {
+  const completedManual = new Set(state?.manual?.completed || []);
+  const stage = Number(state?.task_stage?.stage || 0);
+  const label = String(state?.task_stage?.label || "");
+  const semanticKey = String(state?.task_stage?.semantic_key || "");
+  const checkpointSubmitted =
+    semanticKey === "month3_playbook" ||
+    stage > 10 ||
+    (stage === 10 && /month\s*3/i.test(label) && /playbook/i.test(label));
+
+  const tasks = [1, 2, 3, 4].map((week) => ({
+    key: `month2_week${week}`,
+    label: `Week ${week} — Build a Playbook`,
+    done: completedManual.has(`month2_week${week}`),
+    instructions: week === 1
+      ? "Pick 1 agent + 1 map. Study. Apply. Build one playbook."
+      : "Pick a new agent + map. Study. Apply. Build one playbook.",
+    links: [
+      { label: "Pro VOD Review", url: PRO_VOD_REVIEW_URL, button_label: "Open Resource" },
+      { label: "Playbook Guide", url: PLAYBOOK_GUIDE_URL, button_label: "Open Playbook Guide", emoji: "📘" },
+    ],
+  }));
+
+  tasks.push({
+    key: "month2_checkpoint",
+    label: "Submit 4 Playbooks",
+    checkpoint: true,
+    done: checkpointSubmitted,
+    locked: false,
+    instructions: "Submit all 4 playbooks using the **Month 3 - Playbook** flair.",
+    links: [],
+  });
+
+  return {
+    tasks,
+    completed: tasks.filter((item) => item.done).length,
+    total: tasks.length,
+    next: tasks.find((item) => !item.done) || null,
+    checkpoint_submitted: checkpointSubmitted,
+  };
+}
+
+export function buildMonthThreeModel(state) {
+  const completedManual = new Set(state?.manual?.completed || []);
+  const stage = Number(state?.task_stage?.stage || 0);
+  const label = String(state?.task_stage?.label || "");
+  const semanticKey = String(state?.task_stage?.semantic_key || "");
+  const checkpointSubmitted =
+    semanticKey === "month4_vod_review" ||
+    stage > 11 ||
+    (stage === 11 && /month\s*4/i.test(label) && /vod\s*review/i.test(label));
+
+  const tasks = [1, 2, 3, 4].map((week) => ({
+    key: `month3_week${week}`,
+    label: `Week ${week} — VOD Review`,
+    done: completedManual.has(`month3_week${week}`),
+    instructions: "Review 1 game. Find the #1 problem. Work on it this week.",
+    links: [
+      { label: "VOD Review Framework", url: VOD_REVIEW_FRAMEWORK_URL, button_label: "Open Resource" },
+    ],
+  }));
+
+  tasks.push({
+    key: "month3_checkpoint",
+    label: "90-Day Checkpoint",
+    checkpoint: true,
+    done: checkpointSubmitted,
+    locked: false,
+    instructions: "Submit all 4 weeks using the **Month 4 - VOD Review** flair.",
+    links: [],
+  });
+
+  return {
+    tasks,
+    completed: tasks.filter((item) => item.done).length,
+    total: tasks.length,
+    next: tasks.find((item) => !item.done) || null,
+    checkpoint_submitted: checkpointSubmitted,
   };
 }
 
@@ -1141,7 +1301,7 @@ function fundamentalsProgress(state) {
   return Math.max(0, Math.min(7, stage));
 }
 
-function roadmapSectionNavigation(active = "overview", targetUserId = null) {
+function roadmapSectionNavigation(active = "overview", targetUserId = null, testStage = null) {
   const items = [
     ["overview", "Overview", "🗺️"],
     ["days", "1–7", "7️⃣"],
@@ -1156,11 +1316,28 @@ function roadmapSectionNavigation(active = "overview", targetUserId = null) {
       style: key === active ? 1 : 2,
       custom_id: targetUserId
         ? `roadmap:v41:section-member:${key}:${targetUserId}`
-        : `roadmap:v41:section:${key}`,
+        : testStage !== null
+          ? `roadmap:v41:section-test:${key}:${testStage}`
+          : `roadmap:v41:section:${key}`,
       label,
       emoji: { name: emoji },
       disabled: key === active,
     })),
+  };
+}
+
+function simulatedGroupProgress(testStage, activationTotal, monthOneTotal, monthTwoTotal, monthThreeTotal) {
+  let remaining = Math.max(0, Math.min(ROADMAP_TASK_TOTAL, Number(testStage || 0)));
+  const take = (total) => {
+    const done = Math.min(total, remaining);
+    remaining = Math.max(0, remaining - total);
+    return done;
+  };
+  return {
+    days: take(activationTotal),
+    month1: take(monthOneTotal),
+    month2: take(monthTwoTotal),
+    month3: take(monthThreeTotal),
   };
 }
 
@@ -1170,89 +1347,86 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
 
   const activationModel = buildRoadmapModel(state);
   const monthOne = buildMonthOneModel(state);
-  const knownDone = activationModel.completed + monthOne.completed;
-  const knownTotal = activationModel.total + monthOne.total;
-  const overallPercent = Math.round((knownDone / knownTotal) * 100);
-  const components = [roadmapSectionNavigation(section, options?.readOnly ? userId : null)];
+  const monthTwo = buildMonthTwoModel(state);
+  const monthThree = buildMonthThreeModel(state);
+  const testStage = Number.isFinite(Number(options?.testStage)) ? Number(options.testStage) : null;
+  const simulated = testStage !== null
+    ? simulatedGroupProgress(testStage, activationModel.total, monthOne.total, monthTwo.total, monthThree.total)
+    : null;
+
+  const progress = {
+    days: simulated ? simulated.days : activationModel.completed,
+    month1: simulated ? simulated.month1 : monthOne.completed,
+    month2: simulated ? simulated.month2 : monthTwo.completed,
+    month3: simulated ? simulated.month3 : monthThree.completed,
+  };
+  const totalDone = progress.days + progress.month1 + progress.month2 + progress.month3;
+  const totalTasks = activationModel.total + monthOne.total + monthTwo.total + monthThree.total;
+  const overallPercent = Math.round((totalDone / totalTasks) * 100);
+  const components = [roadmapSectionNavigation(section, options?.readOnly ? userId : null, testStage)];
   let embed;
 
-  if (section === "days") {
+  const sectionData = {
+    days: { title: "7️⃣ Days 1–7", model: activationModel, done: progress.days },
+    month1: { title: "🎯 Month 1", model: monthOne, done: progress.month1 },
+    month2: { title: "🧠 Month 2", model: monthTwo, done: progress.month2 },
+    month3: { title: "🔍 Month 3", model: monthThree, done: progress.month3 },
+  };
+
+  if (sectionData[section]) {
+    const item = sectionData[section];
     embed = {
-      title: "7️⃣ Days 1–7",
+      title: item.title,
       description: [
-        `**${activationModel.completed}/${activationModel.total} complete · ${Math.round((activationModel.completed / activationModel.total) * 100)}%**`,
+        `**${item.done}/${item.model.total} complete · ${Math.round((item.done / item.model.total) * 100)}%**`,
         "",
-        progressCells(activationModel.total, activationModel.completed),
+        progressCells(item.model.total, item.done),
       ].join("\n"),
-      footer: { text: "High-level progress only. /roadmap shows the exact next step and channel." },
-    };
-  } else if (section === "month1") {
-    embed = {
-      title: "🎯 Month 1",
-      description: [
-        `**${monthOne.completed}/${monthOne.total} complete · ${Math.round((monthOne.completed / monthOne.total) * 100)}%**`,
-        "",
-        progressCells(monthOne.total, monthOne.completed, monthOne.next?.locked ? monthOne.completed : -1),
-      ].join("\n"),
-      footer: { text: "High-level progress only. /roadmap shows the exact current task." },
-    };
-  } else if (section === "month2") {
-    embed = {
-      title: "🧠 Month 2",
-      description: "**Tracking not wired yet.**\n\nThis will fill in as we build Month 2.",
-      footer: { text: "High-level roadmap view." },
-    };
-  } else if (section === "month3") {
-    embed = {
-      title: "🔍 Month 3",
-      description: "**Tracking not wired yet.**\n\nThis will fill in as we build Month 3.",
-      footer: { text: "High-level roadmap view." },
+      footer: { text: "High-level only. /roadmap shows the current task." },
     };
   } else {
     embed = {
       title: options?.readOnly ? `🗺️ <@${userId}>'s 90-Day Roadmap` : "🗺️ Your 90-Day Roadmap",
-      description: `**${knownDone}/${knownTotal} tracked tasks complete · ${overallPercent}%**\n\nA high-level view of what is done and what is still ahead.`,
+      description: `**${totalDone}/${totalTasks} complete · ${overallPercent}%**`,
       fields: [
         {
-          name: `7️⃣ Days 1–7 · ${Math.round((activationModel.completed / activationModel.total) * 100)}%`,
-          value: progressCells(activationModel.total, activationModel.completed),
+          name: `7️⃣ Days 1–7 · ${Math.round((progress.days / activationModel.total) * 100)}%`,
+          value: progressCells(activationModel.total, progress.days),
           inline: false,
         },
         {
-          name: `🎯 Month 1 · ${Math.round((monthOne.completed / monthOne.total) * 100)}%`,
-          value: progressCells(monthOne.total, monthOne.completed, monthOne.next?.locked ? monthOne.completed : -1),
+          name: `🎯 Month 1 · ${Math.round((progress.month1 / monthOne.total) * 100)}%`,
+          value: progressCells(monthOne.total, progress.month1),
           inline: false,
         },
         {
-          name: "🧠 Month 2",
-          value: "▫️ Tracking will appear here as Month 2 is built.",
-          inline: true,
+          name: `🧠 Month 2 · ${Math.round((progress.month2 / monthTwo.total) * 100)}%`,
+          value: progressCells(monthTwo.total, progress.month2),
+          inline: false,
         },
         {
-          name: "🔍 Month 3",
-          value: "▫️ Tracking will appear here as Month 3 is built.",
-          inline: true,
+          name: `🔍 Month 3 · ${Math.round((progress.month3 / monthThree.total) * 100)}%`,
+          value: progressCells(monthThree.total, progress.month3),
+          inline: false,
         },
       ],
-      footer: { text: "Use 1–7 / 1 / 2 / 3 above to move through the roadmap." },
+      footer: { text: "1–7 → Month 1 → Month 2 → Month 3." },
     };
   }
 
-  components.push(sectionRefreshRow(section, options?.readOnly ? userId : null));
+  components.push(sectionRefreshRow(section, options?.readOnly ? userId : null, testStage));
   return { content: "", embeds: [embed], components };
 }
 
-function progressCells(total, completed, lockedIndex = -1) {
+function progressCells(total, completed) {
   const cells = [];
   for (let index = 0; index < total; index += 1) {
-    if (index < completed) cells.push("✅");
-    else if (index === lockedIndex) cells.push("🔒");
-    else cells.push("⬜");
+    cells.push(index < completed ? "✅" : "⬜");
   }
   return cells.join(" ");
 }
 
-function sectionRefreshRow(section, targetUserId = null) {
+function sectionRefreshRow(section, targetUserId = null, testStage = null) {
   return {
     type: 1,
     components: [{
@@ -1260,7 +1434,9 @@ function sectionRefreshRow(section, targetUserId = null) {
       style: 2,
       custom_id: targetUserId
         ? `roadmap:v41:refresh-section-member:${section}:${targetUserId}`
-        : `roadmap:v41:refresh-section:${section}`,
+        : testStage !== null
+          ? `roadmap:v41:refresh-section-test:${section}:${testStage}`
+          : `roadmap:v41:refresh-section:${section}`,
       label: "Refresh",
       emoji: { name: "🔄" },
     }],
@@ -1378,6 +1554,8 @@ export const __test = Object.freeze({
   roadmapChannelMatchScore,
   deriveRoadmapActivation,
   buildMonthOneModel,
+  buildMonthTwoModel,
+  buildMonthThreeModel,
   fundamentalsProgress,
   currentRoadmapTask,
   activationTaskInstruction,
@@ -1385,4 +1563,5 @@ export const __test = Object.freeze({
   monthUnlockTimestamp,
   sectionRefreshRow,
   roadmapSectionNavigation,
+  simulatedGroupProgress,
 });

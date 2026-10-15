@@ -15,6 +15,7 @@ const COMMUNITY_THREAD_PREFIX = "community:v47:thread:";
 const TASK_STAGE_PREFIX = "taskstage:v47:member:";
 const TASK_TAG_CACHE_KEY = "taskstage:v47:tags";
 const STABLE_TASK_TAGS_KEY = "taskstage:v47:stable-tags";
+const STABLE_TASK_TAG_SCHEMA_VERSION = 2;
 const TASK_SCAN_STATE_KEY = "taskstage:v47:last-scan";
 
 export const STABLE_TASK_TAG_DEFINITIONS = Object.freeze({
@@ -25,6 +26,10 @@ export const STABLE_TASK_TAG_DEFINITIONS = Object.freeze({
   month3_playbook: Object.freeze({
     stage: 10,
     bootstrap_names: Object.freeze(["Month 3 - Playbook"]),
+  }),
+  month4_vod_review: Object.freeze({
+    stage: 11,
+    bootstrap_names: Object.freeze(["Month 4 - VOD Review"]),
   }),
 });
 
@@ -234,12 +239,13 @@ export async function ensureStableTaskTagIdsV47(gateway, { tagMap = null, force 
   const existing = (await gateway.ctx.storage.get(STABLE_TASK_TAGS_KEY)) || {};
   const ids = { ...(existing.ids || {}) };
   const complete = Object.keys(STABLE_TASK_TAG_DEFINITIONS).every((key) => ids[key]);
+  const schemaCurrent = Number(existing.schema_version || 0) === STABLE_TASK_TAG_SCHEMA_VERSION;
 
-  if (complete && !force) return { ...existing, ids };
+  if (complete && schemaCurrent && !force) return { ...existing, ids };
 
   const checkedAt = Date.parse(existing.checked_at || "");
   const recentlyChecked = Number.isFinite(checkedAt) && checkedAt > Date.now() - 6 * 60 * 60 * 1000;
-  if (!tagMap && recentlyChecked && !force) return { ...existing, ids };
+  if (!tagMap && recentlyChecked && schemaCurrent && !force) return { ...existing, ids };
 
   const currentTagMap = tagMap || await getTaskTagMap(gateway, { force: true });
   let changed = false;
@@ -256,6 +262,7 @@ export async function ensureStableTaskTagIdsV47(gateway, { tagMap = null, force 
   }
 
   const next = {
+    schema_version: STABLE_TASK_TAG_SCHEMA_VERSION,
     ids,
     checked_at: new Date().toISOString(),
     updated_at: changed ? new Date().toISOString() : (existing.updated_at || null),

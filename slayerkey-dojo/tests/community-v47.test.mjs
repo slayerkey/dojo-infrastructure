@@ -202,3 +202,15 @@ test("task thread stores semantic checkpoint key from stable flair ID", async ()
   assert.equal(stored.semantic_key, "month2_dm_review");
   assert.equal(stored.label, "Renamed Mechanics Flair");
 });
+
+
+test("Month 4 VOD review uses its stable flair ID even if renamed", () => {
+  const resolved = community.resolveTaskStageForTag(
+    "tag-vod",
+    "Final Review",
+    { ids: { month4_vod_review: "tag-vod" } },
+  );
+  assert.equal(resolved.stage, 11);
+  assert.equal(resolved.semantic_key, "month4_vod_review");
+  assert.equal(resolved.label, "Final Review");
+});

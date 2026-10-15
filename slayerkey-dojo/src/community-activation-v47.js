@@ -26,6 +26,10 @@ export const STABLE_TASK_TAG_DEFINITIONS = Object.freeze({
     stage: 10,
     bootstrap_names: Object.freeze(["Month 3 - Playbook"]),
   }),
+  month4_vod_review: Object.freeze({
+    stage: 11,
+    bootstrap_names: Object.freeze(["Month 4 - VOD Review"]),
+  }),
 });
 
 export async function observeV47Message(gateway, message, allowRoleFallback = false) {

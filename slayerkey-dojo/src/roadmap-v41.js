@@ -139,20 +139,9 @@ export async function handleRoadmapV41Interaction(request, env, ctx) {
   const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
   if (!stub) return ephemeralMessage("Roadmap storage is unavailable right now.");
 
-  // Owner-bound controls prevent editing another member\'s public progress card.
-  // Pre-upgrade generic buttons are denied except the public launcher\'s Full 90 Days.
-  const ownerSuffix = /:owner:(\d{15,22})$/.exec(customId);
-  if (ownerSuffix) {
-    if (ownerSuffix[1] !== userId) return ephemeralMessage("That roadmap belongs to another member. Run **/roadmap** for yours.");
-    customId = customId.slice(0, ownerSuffix.index);
-  } else if (interaction.type === 3 && /^roadmap:v41:(?:refresh|full|manual|complete|section|refresh-section)(?::|$)/.test(customId)) {
-    const launcher = (interaction?.message?.components || []).some((row) =>
-      (row.components || []).some((button) => button.custom_id === "roadmap:v41:view"));
-    if (!(customId === "roadmap:v41:full" && launcher)) {
-      return ephemeralMessage("These old controls are no longer active. Run **/roadmap** to open your own card.");
-    }
-  }
-
+  const action = resolveRoadmapOwnerAction(customId, userId, interaction);
+  if (action.denied) return ephemeralMessage(action.denied);
+  customId = action.customId;
   if (command === "roadmap-leaderboard" || customId === "roadmap:v41:leaderboard") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the leaderboard.");
     const work = async () => {
@@ -1553,6 +1542,24 @@ function normalizeChannelName(value) {
 function commandSignature(command) {
   return JSON.stringify({ name: command?.name, description: command?.description, type: command?.type, options: command?.options || [] });
 }
+export function resolveRoadmapOwnerAction(rawCustomId, actingUserId, interaction) {
+  const customId = String(rawCustomId || "");
+  const userId = String(actingUserId || "");
+  const suffix = /:owner:(\d{15,22})$/.exec(customId);
+  if (suffix) {
+    if (suffix[1] !== userId) return { denied: "That roadmap belongs to another member. Run **/roadmap** for yours." };
+    return { customId: customId.slice(0, suffix.index) };
+  }
+  if (interaction?.type === 3 &&
+      /^roadmap:v41:(?:refresh|full|manual|complete|section|refresh-section)(?::|$)/.test(customId)) {
+    const launcher = (interaction?.message?.components || []).some((row) =>
+      (row.components || []).some((button) => button.custom_id === "roadmap:v41:view"));
+    if (!(customId === "roadmap:v41:full" && launcher)) {
+      return { denied: "These old controls are no longer active. Run **/roadmap** to open your own card." };
+    }
+  }
+  return { customId };
+}
 function interactionDisplayName(interaction) {
   const member = interaction?.member || {};
   const user = member.user || interaction?.user || {};
@@ -1635,4 +1642,7 @@ export const __test = Object.freeze({
   sectionRefreshRow,
   roadmapSectionNavigation,
   simulatedGroupProgress,
+  resolveRoadmapOwnerAction,
+  buildRoadmapView,
+  buildRoadmapSectionView,
 });

@@ -69,7 +69,7 @@ export default {
           live_activation_checks: true,
           manual_checklist_items: true,
           new_polling_cron: false,
-          commands: ["/roadmap", "/roadmap-setup", "/roadmap-preview", "/roadmap-visibility"],
+          commands: ["/roadmap", "/roadmap-leaderboard", "/roadmap-setup", "/roadmap-preview", "/roadmap-visibility"],
         };
         return Response.json(body, { status: response.status });
       } catch {

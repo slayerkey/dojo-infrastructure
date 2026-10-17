@@ -6,6 +6,7 @@ import {
 } from "./activation-core.js";
 import { fullMonthsSince } from "./membership-core.js";
 import { buildRoadmapLeaderboard, buildLeaderboardMessage } from "./roadmap-leaderboard-v43.js";
+import { resolveLeaderboardMonth, getMonthlyLeaderboardMessage } from "./roadmap-monthly-v44.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -79,7 +80,17 @@ export const ROADMAP_COMMANDS = Object.freeze([
       required: false,
     }],
   },
-  { name: "roadmap-leaderboard", description: "See who completed the most 90-day roadmap tasks", type: 1 },
+  {
+    name: "roadmap-leaderboard",
+    description: "View live or archived 90-day roadmap standings",
+    type: 1,
+    options: [{
+      type: 3,
+      name: "month",
+      description: "Optional: September, last month, or 2026-09. Blank = current standings",
+      required: false,
+    }],
+  },
   { name: "roadmap-setup", description: "Post or refresh the persistent Dojo roadmap card in this channel", type: 1 },
   { name: "roadmap-preview", description: "Preview every roadmap link before publishing", type: 1 },
   {
@@ -144,19 +155,22 @@ export async function handleRoadmapV41Interaction(request, env, ctx) {
   customId = action.customId;
   if (command === "roadmap-leaderboard" || customId === "roadmap:v41:leaderboard") {
     if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the leaderboard.");
+    const month = resolveLeaderboardMonth(command === "roadmap-leaderboard"
+      ? commandOption(interaction, "month") : null);
+    if (month.error) return ephemeralMessage(month.error);
     const work = async () => {
       try {
-        const snapshot = await buildRoadmapLeaderboard(env, stub, [
+        const view = await getMonthlyLeaderboardMessage(month, env, stub, [
           buildRoadmapModel, buildMonthOneModel, buildMonthTwoModel, buildMonthThreeModel,
-        ]);
-        await editRoadmapInteraction(interaction, env, buildLeaderboardMessage(snapshot, userId));
+        ], userId);
+        await editRoadmapInteraction(interaction, env, view);
       } catch (error) {
         console.error("Roadmap leaderboard failed:", error);
         await editRoadmapInteraction(interaction, env, { content: "Leaderboard unavailable. Try again shortly." }).catch(() => {});
       }
     };
     ctx.waitUntil(work());
-    return Response.json({ type: 5, data: customId === "roadmap:v41:leaderboard" ? { flags: EPHEMERAL } : {} });
+    return Response.json({ type: 5, data: (customId === "roadmap:v41:leaderboard" || month.kind === "archive") ? { flags: EPHEMERAL } : {} });
   }
 
   if (command === "roadmap-setup") {
@@ -488,7 +502,7 @@ export async function handleRoadmapV41Interaction(request, env, ctx) {
 
 export async function ensureRoadmapV41CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v43.1").catch(() => false);
+  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v44.1").catch(() => false);
   if (!claimed) return;
 
   try {

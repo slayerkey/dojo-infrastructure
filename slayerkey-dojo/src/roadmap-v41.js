@@ -884,7 +884,7 @@ export function buildRoadmapCard(config = {}) {
       {
         type: 2,
         style: 2,
-        custom_id: `roadmap:v41:full:owner:${userId}`,
+        custom_id: "roadmap:v41:full",
         label: "Full 90 Days",
         emoji: { name: "🗺️" },
       },

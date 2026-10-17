@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import worker from "../src/index-v41.js";
 import {
   FUNDAMENTALS_URL,
   ONBOARDING_URL,
   ROADMAP_COMMANDS,
   __test as roadmap,
   getRoadmapV41State,
+  handleRoadmapV41Interaction,
 } from "../src/roadmap-v41.js";
 
 const anchor = "2026-09-01T00:00:00.000Z";
@@ -67,7 +67,7 @@ test("channel resolver never prefers old-introductions over the live introductio
   assert.equal(roadmap.roadmapChannelMatchScore("👋┃introductions", ["introductions"]), 100);
 });
 
-test("v41 routes roadmap slash commands before the legacy interaction chain", async () => {
+test("v41 validates a signed roadmap interaction before storage or legacy access", async () => {
   const request = new Request("https://example.com/discord/interactions", {
     method: "POST",
     headers: {
@@ -82,7 +82,7 @@ test("v41 routes roadmap slash commands before the legacy interaction chain", as
     }),
   });
 
-  const response = await worker.fetch(request, {
+  const response = await handleRoadmapV41Interaction(request, {
     DISCORD_PUBLIC_KEY: "00",
     DISCORD_GUILD_ID: "guild",
   }, {});

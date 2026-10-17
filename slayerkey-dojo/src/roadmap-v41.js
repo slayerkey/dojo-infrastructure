@@ -5,6 +5,7 @@ import {
   mergeTenureIntoRecord,
 } from "./activation-core.js";
 import { fullMonthsSince } from "./membership-core.js";
+import { buildRoadmapLeaderboard, buildLeaderboardMessage } from "./roadmap-leaderboard-v43.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const EPHEMERAL = 64;
@@ -78,6 +79,7 @@ export const ROADMAP_COMMANDS = Object.freeze([
       required: false,
     }],
   },
+  { name: "roadmap-leaderboard", description: "See who completed the most 90-day roadmap tasks", type: 1 },
   { name: "roadmap-setup", description: "Post or refresh the persistent Dojo roadmap card in this channel", type: 1 },
   { name: "roadmap-preview", description: "Preview every roadmap link before publishing", type: 1 },
   {
@@ -110,16 +112,17 @@ const CHANNEL_ALIASES = Object.freeze({
   community_help: ["community-help", "community help", "help"],
 });
 
-export async function handleRoadmapV41Interaction(request, env) {
+export async function handleRoadmapV41Interaction(request, env, ctx) {
   const rawBody = await request.text();
   let interaction;
   try { interaction = JSON.parse(rawBody); } catch { return null; }
 
   const command = interaction?.type === 2 ? String(interaction?.data?.name || "") : "";
-  const customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
+  let customId = interaction?.data?.custom_id ? String(interaction.data.custom_id) : "";
   const isRoadmap =
     command === "roadmap" ||
     command === "roadmap-setup" ||
+    command === "roadmap-leaderboard" ||
     command === "roadmap-preview" ||
     command === "roadmap-visibility" ||
     customId.startsWith("roadmap:v41:");
@@ -135,6 +138,26 @@ export async function handleRoadmapV41Interaction(request, env) {
   const userId = interactionUserId(interaction);
   const stub = env.DISCORD_GATEWAY?.getByName("dojo-main");
   if (!stub) return ephemeralMessage("Roadmap storage is unavailable right now.");
+
+  const action = resolveRoadmapOwnerAction(customId, userId, interaction);
+  if (action.denied) return ephemeralMessage(action.denied);
+  customId = action.customId;
+  if (command === "roadmap-leaderboard" || customId === "roadmap:v41:leaderboard") {
+    if (!hasDojoAccess(interaction, env)) return ephemeralMessage("You need the Dojo role to use the leaderboard.");
+    const work = async () => {
+      try {
+        const snapshot = await buildRoadmapLeaderboard(env, stub, [
+          buildRoadmapModel, buildMonthOneModel, buildMonthTwoModel, buildMonthThreeModel,
+        ]);
+        await editRoadmapInteraction(interaction, env, buildLeaderboardMessage(snapshot, userId));
+      } catch (error) {
+        console.error("Roadmap leaderboard failed:", error);
+        await editRoadmapInteraction(interaction, env, { content: "Leaderboard unavailable. Try again shortly." }).catch(() => {});
+      }
+    };
+    ctx.waitUntil(work());
+    return Response.json({ type: 5, data: customId === "roadmap:v41:leaderboard" ? { flags: EPHEMERAL } : {} });
+  }
 
   if (command === "roadmap-setup") {
     if (!isOwner(userId, env)) return ephemeralMessage("Only the Dojo owner can set up the roadmap card.");
@@ -191,6 +214,7 @@ export async function handleRoadmapV41Interaction(request, env) {
       const view = await buildRoadmapView(userId, env, stub, true, true, {
         testStage: nextStage,
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
@@ -205,6 +229,7 @@ export async function handleRoadmapV41Interaction(request, env) {
       const view = await buildRoadmapView(userId, env, stub, true, true, {
         testStage: stage,
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
@@ -218,6 +243,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(userId, env, stub, "overview", true, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         testStage: stage,
       });
       return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
@@ -235,6 +261,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(userId, env, stub, section, true, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         testStage: stage,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -252,6 +279,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(userId, env, stub, section, true, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         testStage: stage,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -266,6 +294,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapView(targetUserId, env, stub, false, false, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         readOnly: true,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -283,6 +312,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(targetUserId, env, stub, section, false, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         readOnly: true,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -297,6 +327,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(userId, env, stub, section, isOwner(userId, env), {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
@@ -313,6 +344,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(targetUserId, env, stub, section, false, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         readOnly: true,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -327,6 +359,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(targetUserId, env, stub, "overview", false, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         readOnly: true,
       });
       return Response.json({ type: 4, data: { ...view, flags: EPHEMERAL, allowed_mentions: { parse: [] } } });
@@ -343,6 +376,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapSectionView(userId, env, stub, section, isOwner(userId, env), {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
       });
       const config = await stub.getRoadmapV41Config().catch(() => null);
       const isPublic = String(config?.progress_visibility || "public") !== "private";
@@ -351,7 +385,7 @@ export async function handleRoadmapV41Interaction(request, env) {
         type: updateExisting ? 7 : 4,
         data: {
           ...view,
-          ...(!updateExisting && !isPublic ? { flags: EPHEMERAL } : {}),
+          ...(!updateExisting ? { flags: EPHEMERAL } : {}),
           allowed_mentions: { parse: [] },
         },
       });
@@ -372,6 +406,7 @@ export async function handleRoadmapV41Interaction(request, env) {
       if (!saved?.ok) return ephemeralMessage(saved?.message || "I couldn't update that task.");
       const view = await buildRoadmapView(userId, env, stub, false, true, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
     } catch (error) {
@@ -399,6 +434,7 @@ export async function handleRoadmapV41Interaction(request, env) {
         !viewingOtherMember,
         {
           viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
           readOnly: viewingOtherMember,
           testStage: !viewingOtherMember && isOwner(userId, env) ? 0 : null,
         },
@@ -423,6 +459,7 @@ export async function handleRoadmapV41Interaction(request, env) {
     try {
       const view = await buildRoadmapView(userId, env, stub, isOwner(userId, env), true, {
         viewerUserId: userId,
+        displayName: interactionDisplayName(interaction),
         testStage: isOwner(userId, env) ? 0 : null,
       });
       return Response.json({ type: 7, data: { ...view, allowed_mentions: { parse: [] } } });
@@ -451,7 +488,7 @@ export async function handleRoadmapV41Interaction(request, env) {
 
 export async function ensureRoadmapV41CommandsOnce(env, stub) {
   if (!env.DISCORD_APP_ID || !env.DISCORD_GUILD_ID || !env.DISCORD_BOT_TOKEN || !stub) return;
-  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v41.3").catch(() => false);
+  const claimed = await stub.claimRoadmapV41CommandRegistration("roadmap-v43.1").catch(() => false);
   if (!claimed) return;
 
   try {
@@ -466,9 +503,9 @@ export async function ensureRoadmapV41CommandsOnce(env, stub) {
         await discordJson(`${base}/${current.id}`, env, { method: "PATCH", body: JSON.stringify(command) });
       }
     }
-    await stub.completeRoadmapV41CommandRegistration("roadmap-v41.3");
+    await stub.completeRoadmapV41CommandRegistration("roadmap-v43.1");
   } catch (error) {
-    await stub.failRoadmapV41CommandRegistration("roadmap-v41.3", safeError(error)).catch(() => {});
+    await stub.failRoadmapV41CommandRegistration("roadmap-v43.1", safeError(error)).catch(() => {});
     throw error;
   }
 }
@@ -865,6 +902,13 @@ export function buildRoadmapCard(config = {}) {
         label: "7-Day Fundamentals",
         emoji: { name: "🧪" },
       },
+      {
+        type: 2,
+        style: 2,
+        custom_id: "roadmap:v41:leaderboard",
+        label: "Leaderboard",
+        emoji: { name: "🏆" },
+      },
     ],
   }];
 
@@ -976,7 +1020,7 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     primary.push({
       type: 2,
       style: 3,
-      custom_id: `roadmap:v41:complete:${current.manual_key}`,
+      custom_id: `roadmap:v41:complete:${current.manual_key}:owner:${userId}`,
       label: "Complete Task",
       emoji: { name: "✅" },
     });
@@ -986,7 +1030,7 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
     ? `roadmap:v41:refresh-member:${userId}`
     : ownerTesting
       ? `roadmap:v41:refresh-test:${testStage}`
-      : "roadmap:v41:refresh";
+      : `roadmap:v41:refresh:owner:${userId}`;
   primary.push({
     type: 2,
     style: 2,
@@ -1002,7 +1046,7 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
       ? `roadmap:v41:full-member:${userId}`
       : ownerTesting
         ? `roadmap:v41:full-test:${testStage}`
-        : "roadmap:v41:full",
+        : `roadmap:v41:full:owner:${userId}`,
     label: "View Full 90 Days",
     emoji: { name: "🗺️" },
   });
@@ -1041,7 +1085,7 @@ async function buildRoadmapView(userId, env, stub, allowPreview = false, allowRo
   return {
     content: "",
     embeds: [{
-      title: options?.readOnly ? `🧭 <@${userId}>'s Dojo Roadmap` : "🧭 Your Dojo Roadmap",
+      title: options?.readOnly ? "🧭 Member Dojo Roadmap" : `🧭 ${safeRoadmapName(options?.displayName)}'s Dojo Roadmap`,
       description: ownerTesting
         ? `**Test Progress:** ${Math.min(ROADMAP_TASK_TOTAL, testStage)}/${ROADMAP_TASK_TOTAL} · **${Math.round((Math.min(ROADMAP_TASK_TOTAL, testStage) / ROADMAP_TASK_TOTAL) * 100)}%**`
         : `**90-Day Progress:** ${knownDone}/${knownTotal} · **${knownPercent}%**`,
@@ -1301,7 +1345,7 @@ function fundamentalsProgress(state) {
   return Math.max(0, Math.min(7, stage));
 }
 
-function roadmapSectionNavigation(active = "overview", targetUserId = null, testStage = null) {
+function roadmapSectionNavigation(active = "overview", targetUserId = null, testStage = null, ownerUserId = null) {
   const items = [
     ["overview", "Overview", "🗺️"],
     ["days", "1–7", "7️⃣"],
@@ -1318,7 +1362,7 @@ function roadmapSectionNavigation(active = "overview", targetUserId = null, test
         ? `roadmap:v41:section-member:${key}:${targetUserId}`
         : testStage !== null
           ? `roadmap:v41:section-test:${key}:${testStage}`
-          : `roadmap:v41:section:${key}`,
+          : `roadmap:v41:section:${key}${ownerUserId ? `:owner:${ownerUserId}` : ""}`,
       label,
       emoji: { name: emoji },
       disabled: key === active,
@@ -1363,7 +1407,7 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
   const totalDone = progress.days + progress.month1 + progress.month2 + progress.month3;
   const totalTasks = activationModel.total + monthOne.total + monthTwo.total + monthThree.total;
   const overallPercent = Math.round((totalDone / totalTasks) * 100);
-  const components = [roadmapSectionNavigation(section, options?.readOnly ? userId : null, testStage)];
+  const components = [roadmapSectionNavigation(section, options?.readOnly ? userId : null, testStage, options?.readOnly ? null : userId)];
   let embed;
 
   const sectionData = {
@@ -1376,7 +1420,7 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
   if (sectionData[section]) {
     const item = sectionData[section];
     embed = {
-      title: item.title,
+      title: options?.readOnly ? item.title : `${safeRoadmapName(options?.displayName)} — ${item.title}`,
       description: [
         `**${item.done}/${item.model.total} complete · ${Math.round((item.done / item.model.total) * 100)}%**`,
         "",
@@ -1386,7 +1430,7 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
     };
   } else {
     embed = {
-      title: options?.readOnly ? `🗺️ <@${userId}>'s 90-Day Roadmap` : "🗺️ Your 90-Day Roadmap",
+      title: options?.readOnly ? "🗺️ Member 90-Day Roadmap" : `🗺️ ${safeRoadmapName(options?.displayName)}'s 90-Day Roadmap`,
       description: `**${totalDone}/${totalTasks} complete · ${overallPercent}%**`,
       fields: [
         {
@@ -1414,7 +1458,7 @@ async function buildRoadmapSectionView(userId, env, stub, section = "overview", 
     };
   }
 
-  components.push(sectionRefreshRow(section, options?.readOnly ? userId : null, testStage));
+  components.push(sectionRefreshRow(section, options?.readOnly ? userId : null, testStage, options?.readOnly ? null : userId));
   return { content: "", embeds: [embed], components };
 }
 
@@ -1426,7 +1470,7 @@ function progressCells(total, completed) {
   return cells.join(" ");
 }
 
-function sectionRefreshRow(section, targetUserId = null, testStage = null) {
+function sectionRefreshRow(section, targetUserId = null, testStage = null, ownerUserId = null) {
   return {
     type: 1,
     components: [{
@@ -1436,7 +1480,7 @@ function sectionRefreshRow(section, targetUserId = null, testStage = null) {
         ? `roadmap:v41:refresh-section-member:${section}:${targetUserId}`
         : testStage !== null
           ? `roadmap:v41:refresh-section-test:${section}:${testStage}`
-          : `roadmap:v41:refresh-section:${section}`,
+          : `roadmap:v41:refresh-section:${section}${ownerUserId ? `:owner:${ownerUserId}` : ""}`,
       label: "Refresh",
       emoji: { name: "🔄" },
     }],
@@ -1497,6 +1541,40 @@ function normalizeChannelName(value) {
 }
 function commandSignature(command) {
   return JSON.stringify({ name: command?.name, description: command?.description, type: command?.type, options: command?.options || [] });
+}
+export function resolveRoadmapOwnerAction(rawCustomId, actingUserId, interaction) {
+  const customId = String(rawCustomId || "");
+  const userId = String(actingUserId || "");
+  const suffix = /:owner:(\d{15,22})$/.exec(customId);
+  if (suffix) {
+    if (suffix[1] !== userId) return { denied: "That roadmap belongs to another member. Run **/roadmap** for yours." };
+    return { customId: customId.slice(0, suffix.index) };
+  }
+  if (interaction?.type === 3 &&
+      /^roadmap:v41:(?:refresh|full|manual|complete|section|refresh-section)(?::|$)/.test(customId)) {
+    const launcher = (interaction?.message?.components || []).some((row) =>
+      (row.components || []).some((button) => button.custom_id === "roadmap:v41:view"));
+    if (!(customId === "roadmap:v41:full" && launcher)) {
+      return { denied: "These old controls are no longer active. Run **/roadmap** to open your own card." };
+    }
+  }
+  return { customId };
+}
+function interactionDisplayName(interaction) {
+  const member = interaction?.member || {};
+  const user = member.user || interaction?.user || {};
+  return member.nick || user.global_name || user.username || "Member";
+}
+function safeRoadmapName(name) {
+  return String(name || "Member").replace(/[\x00-\x1f\x7f<>@*_~|\\]/g, "").trim().slice(0, 48) || "Member";
+}
+async function editRoadmapInteraction(interaction, env, payload) {
+  const response = await fetch(`${DISCORD_API}/webhooks/${env.DISCORD_APP_ID}/${interaction.token}/messages/@original`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, allowed_mentions: { parse: [] } }),
+  });
+  if (!response.ok) throw new Error("Leaderboard edit failed: " + response.status);
 }
 function interactionUserId(interaction) {
   return String(interaction?.member?.user?.id || interaction?.user?.id || "");
@@ -1564,4 +1642,7 @@ export const __test = Object.freeze({
   sectionRefreshRow,
   roadmapSectionNavigation,
   simulatedGroupProgress,
+  resolveRoadmapOwnerAction,
+  buildRoadmapView,
+  buildRoadmapSectionView,
 });

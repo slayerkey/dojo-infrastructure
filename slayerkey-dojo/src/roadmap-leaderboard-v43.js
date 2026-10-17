@@ -56,9 +56,9 @@ function displayName(member) {
 
 export async function buildRoadmapLeaderboard(env, stub, modelBuilders, options = {}) {
   if (!stub) throw new Error("Dojo storage unavailable.");
-  const now = options.now || Date.now();
+  const now = options.now ?? Date.now();
   const cached = await stub.getRoadmapLeaderboardCache();
-  if (cached?.rows && now - Number(cached.created_ms || 0) < CACHE_MS) return cached;
+  if (!options.forceRefresh && cached?.rows && now - Number(cached.created_ms || 0) < CACHE_MS && now >= Number(cached.created_ms || 0)) return cached;
 
   const members = await currentDojoMembers(env, options.api);
   const rows = [];
@@ -83,7 +83,7 @@ export async function buildRoadmapLeaderboard(env, stub, modelBuilders, options 
   return result;
 }
 
-export function buildLeaderboardMessage(snapshot, viewerUserId) {
+export function buildLeaderboardMessage(snapshot, viewerUserId, options = {}) {
   const rows = snapshot?.rows || [];
   const top = rows.slice(0, 10);
   const lines = top.map((row) =>
@@ -96,14 +96,19 @@ export function buildLeaderboardMessage(snapshot, viewerUserId) {
   return {
     content: "",
     embeds: [{
-      title: "Dojo 90-Day Roadmap Leaderboard",
+      title: "Dojo 90-Day Roadmap Leaderboard" + (options.label ? " — " + options.label : ""),
       description: [
         lines.length ? lines.join("\n") : "No verified Dojo members with roadmap data yet.",
         "",
-        "**Metric:** tracked tasks completed, not RR. Some tasks are self-reported.",
+        options.archived
+          ? "**Archived month-end standings.** Total tasks completed by the snapshot date (cumulative), not tasks gained that month."
+          : "**Current standings.** Total tracked tasks completed (cumulative), not RR.",
+        "Some tasks are self-reported.",
         "Use /roadmap to see and update your own progress.",
       ].join("\n"),
-      footer: { text: rows.length + " current Dojo members scored · Refreshes at most every 5 minutes" },
+      footer: { text: options.archived
+        ? rows.length + " members · Frozen " + (options.capturedAt || "at month end") + " · Never recalculated"
+        : rows.length + " current Dojo members scored · Refreshes at most every 5 minutes" },
     }],
     allowed_mentions: { parse: [] },
   };

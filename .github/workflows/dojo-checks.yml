@@ -18,4 +18,4 @@ jobs:
         with:
           node-version: '22'
       - run: npm install
-      - run: npm run check:v43
+      - run: npm run check:v44

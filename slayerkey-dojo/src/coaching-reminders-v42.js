@@ -2,14 +2,14 @@ const DISCORD_API = "https://discord.com/api/v10";
 const GUILD_ID = "1494446702378221590";
 const REFERENCE_EVENT_ID = "1533227276974555176";
 const CLASSROOM_VC = "https://discord.com/channels/1494446702378221590/1530226054210261032";
+const GENERAL_CHANNEL_ID = "1532854321723478217";
 const SEVEN_HOURS_MS = 7 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const MAX_DRIFT_MS = 3 * MINUTE_MS;
 
-// Existing Google Calendar series: Saturday 12:00 PM America/Phoenix.
-// Only contact Discord near the two reminder slots, not on every minute cron.
+// Existing weekly coaching call: Saturdays at noon, Arizona local time.
+// Send one reminder 30 minutes before the scheduled Discord event.
 const SLOTS = Object.freeze([
-  { minuteOfDay: 6 * 60, beforeMinutes: 360, label: "6 HOURS" },
   { minuteOfDay: 11 * 60 + 30, beforeMinutes: 30, label: "30 MINUTES" },
 ]);
 
@@ -39,23 +39,13 @@ export function selectCoachingEvent(events, now, slot) {
   return pool.length === 1 ? pool[0].event : null;
 }
 
-export function selectAnnouncementChannel(channels, overrideId = "") {
-  if (overrideId) return String(overrideId);
-  const matches = (Array.isArray(channels) ? channels : []).filter((channel) =>
-    [0, 5].includes(Number(channel?.type)) &&
-    /^announcements?$/.test(String(channel?.name || "").trim().toLowerCase())
-  );
-  // Do not guess which channel should receive @everyone if there are duplicates.
-  return matches.length === 1 ? String(matches[0].id) : null;
-}
-
 export function buildCoachingReminder(slot, event, guildId = GUILD_ID) {
   const eventUrl = "https://discord.com/events/" + guildId + "/" + event.id;
   return [
-    "@everyone **COACHING CALL IN " + slot.label + "**",
-    "We're meeting in **Classroom**. Bring your clips and questions.",
+    "@everyone **COACHING CALL STARTS IN " + slot.label + "**",
+    "Bring any clips or questions — we\'ll go through them live in **Classroom VC**.",
+    "**Discord event:** " + eventUrl,
     "**Join the VC:** " + CLASSROOM_VC,
-    "**Event:** " + eventUrl,
   ].join("\n");
 }
 
@@ -87,14 +77,8 @@ export async function runCoachingReminderScheduler(env, stub, now = new Date(), 
   const event = selectCoachingEvent(events, now, slot);
   if (!event) return { skipped: "matching_live_coaching_event_not_found" };
 
-  let channelId = String(env.COACHING_ANNOUNCEMENT_CHANNEL_ID || "");
-  if (!channelId) {
-    const channels = await api(DISCORD_API + "/guilds/" + guildId + "/channels", env);
-    channelId = selectAnnouncementChannel(channels);
-  }
-  if (!channelId) {
-    throw new Error("No unique #announcements channel found. Configure COACHING_ANNOUNCEMENT_CHANNEL_ID.");
-  }
+  // General is the explicitly confirmed destination. Never fall back to #announcements.
+  const channelId = GENERAL_CHANNEL_ID;
 
   const reminderKey = "coaching:v42:" + event.id + ":" + event.scheduled_start_time + ":" + slot.beforeMinutes;
   if (!(await stub.claimCoachingReminder(reminderKey))) return { skipped: "already_sent" };

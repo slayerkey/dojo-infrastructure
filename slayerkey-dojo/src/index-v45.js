@@ -9,12 +9,7 @@ export default {
       body.discord = body.discord || {};
       body.discord.coaching_reminder = {
         version: "v45",
-        scheduled: true,
-        time_before_minutes: 30,
-        channel_id: "1532854321723478217",
-        destination: "general",
-        includes_event_link: true,
-        includes_classroom_vc_link: true,
+        scheduled: false,
       };
       return Response.json(body, { status: response.status });
     } catch {
